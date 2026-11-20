@@ -180,7 +180,7 @@ function renderPanel() {
     el.innerHTML = M.bundle.defs.map((d) => {
       const e = p.elements[d.code];
       return `<details class="el"><summary><span class="code">${d.code}</span><span style="flex:1">${esc(d.title)}</span><span class="dot ${e ? e.status : "empty"}"></span></summary>
-        <div class="body">${d.sections.map((s) => `<h5>${esc(s.label)}</h5><p>${esc((e && e.content[s.key]) || "—")}</p>`).join("")}</div></details>`;
+        <div class="body">${Forms.view(d.fields, e && e.content)}</div></details>`;
     }).join("");
   } else if (M.tab === "burn") {
     el.innerHTML = p.burn_days.map((b) => `<div class="feat"><span class="lbl"><b>${b.burn_date}</b></span><span class="badge ${b.decision === "go" ? "approved" : b.decision === "no_go" ? "cancelled" : "draft"}">${b.decision.replace("_", "-")}</span></div>`).join("")

@@ -18,7 +18,7 @@ async function call(fn) { try { return await fn(); } catch (e) { if (e.status ==
 
 // --- routing -----------------------------------------------------------------------
 async function route() {
-  const m = location.hash.match(/^#plan\/(\d+)(?:\/(\w+))?/);
+  const m = location.hash.match(/^#plan\/(\d+)(?:\/([\w-]+))?/);
   if (!S.user) {
     try { S.user = await RX.api("/api/me"); } catch (e) { return showLogin(); }
     document.getElementById("who").textContent = `${S.user.display_name} · ${S.user.role.replace("_", " ")}`;
@@ -109,23 +109,140 @@ async function createBlock(gj) {
   if (!name) return showList();
   const win = prompt("Planned burn window (optional, e.g. Apr 15 – May 14, 2027)", "") || null;
   const r = await call(() => RX.api("/api/plans", { method: "POST", body: { name, planned_window: win, geom: gj } }));
-  toast("Burn block created: now build its fire plan"); location.hash = `#plan/${r.id}/features`;
+  toast("Burn block created: now build its fire plan"); location.hash = `#plan/${r.id}/map`;
 }
 
-// --- workspace -----------------------------------------------------------------------
-async function showPlan(id, tab) {
-  if (tab) S.tab = tab;
+// --- fire plan view: elements on the left, the selected element on the right -------------
+const NAV_GROUPS = [["Map and data", [["map", "Plan map"], ["values", "Values and fuels"], ["visits", "Site visits"]]],
+                    ["Implementation", [["burn", "Burn days"], ["versions", "Versions and signatures"]]]];
+const MAP_VIEWS = new Set(["map", "values", "visits"]);
+async function showPlan(id, sel) {
+  S.sel = sel || (S.planId === id && S.sel) || "e-4";
   const [plan, fc, ov] = await call(() => Promise.all([RX.api(`/api/plans/${id}`), RX.api(`/api/plans/${id}/features`), RX.api(`/api/plans/${id}/overlay`)]));
   S.plan = plan; S.featuresFC = fc; S.overlay = ov;
-  const freshMap = S.view !== "plan" || !document.getElementById("map");
-  S.view = "plan"; S.mode = "plan";
-  if (freshMap) {
-    view.innerHTML = `<div class="ws-bar" id="bar"></div><div class="ws"><div id="map"></div><div class="side">
-      <div class="tabs" role="tablist" id="tabs"></div><div class="tabpanel" id="panel"></div></div></div>`;
-    buildMap();
+  const fresh = S.view !== "plan" || S.planId !== id || !document.getElementById("pv");
+  S.view = "plan"; S.mode = "plan"; S.planId = id; S.dirty = false;
+  if (fresh) {
+    view.innerHTML = `<div class="ws-bar" id="bar"></div><div class="pv" id="pv"><nav class="pv-nav" id="nav" aria-label="Plan sections"></nav><section class="pv-main" id="main"></section></div>`;
+    S.mapEl = document.createElement("div"); S.mapEl.id = "map";
+    document.getElementById("main").appendChild(S.mapEl); buildMap();
   }
-  renderBar(); drawPlanFeatures(); renderTabs(); renderPanel();
-  if (freshMap) fitPlan();
+  renderBar(); drawPlanFeatures(); renderNav(); renderMain();
+}
+function go(key) {
+  if (S.dirty && !confirm("This element has unsaved changes. Leave without saving?")) return;
+  S.dirty = false; location.hash = `#plan/${S.plan.id}/${key}`;
+}
+window.addEventListener("beforeunload", (e) => { if (S.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+function renderNav() {
+  const els = S.plan.elements;
+  const done = S.defs.filter((d) => (els[d.code] || {}).status === "complete").length;
+  const item = (key, inner) => `<button type="button" class="nav-item" data-k="${key}" aria-current="${S.sel === key ? "page" : "false"}">${inner}</button>`;
+  const nav = document.getElementById("nav");
+  nav.innerHTML = `<div class="nav-sec">Plan elements <span class="hint">${done} of ${S.defs.length} complete</span></div>
+    ${S.defs.map((d) => { const st = (els[d.code] || {}).status || "empty";
+      return item("e-" + d.code, `<span class="dot ${st}" title="${st}"><span class="sr">${st}</span></span><span class="nc">${d.code}</span><span class="nt">${esc(d.title.replace(/^Appendix [A-F]: /, ""))}</span>`); }).join("")}
+    ${NAV_GROUPS.map(([g, items]) => `<div class="nav-sec">${g}</div>` + items.map(([k, l]) => item(k, `<span class="dot tool"></span><span class="nt">${l}</span>`)).join("")).join("")}`;
+  nav.querySelectorAll(".nav-item").forEach((b) => (b.onclick = () => go(b.dataset.k)));
+  const cur = nav.querySelector('[aria-current="page"]'); if (cur) cur.scrollIntoView({ block: "nearest" });
+}
+
+function placeMap(slotId) {
+  document.getElementById(slotId).appendChild(S.mapEl);
+  setTimeout(() => { S.map.invalidateSize(); fitPlan(); }, 0);
+}
+function renderMain() {
+  const main = document.getElementById("main");
+  S.mapEl.remove(); main.innerHTML = "";
+  if (S.visitLayer) { S.map.removeLayer(S.visitLayer); S.visitLayer = null; }
+  const lock = locked() ? `<div class="locked">This plan is ${S.plan.status} and locked. Use <b>Amend</b> to make a new version.</div>` : "";
+  if (S.sel.startsWith("e-")) return renderElement(main, S.sel.slice(2), lock);
+  if (MAP_VIEWS.has(S.sel)) {
+    main.innerHTML = `<div class="split"><div class="map-slot" id="mslot"></div><div class="split-side" id="side">${lock}</div></div>`;
+    placeMap("mslot");
+    return ({ map: panelFeatures, values: panelValues, visits: panelVisits })[S.sel](document.getElementById("side"));
+  }
+  main.innerHTML = `<div class="doc">${lock}<h2 class="doc-title">${S.sel === "burn" ? "Burn days" : "Versions and signatures"}</h2><div id="docbody"></div></div>`;
+  ({ burn: panelBurn, versions: panelVersions })[S.sel](document.getElementById("docbody"));
+}
+
+// The plan's own data, shown read-only inside elements.
+function autoHtml(src, live) {
+  const p = S.plan, feats = S.featuresFC.features.map((f) => f.properties);
+  const list = (kind, unit) => feats.filter((f) => f.kind === kind).map((f) => `<li>${esc(f.label || RX.KINDS[kind].label)}${unit === "ha" && f.area_ha ? ` · ${f.area_ha} ha` : ""}${unit === "m" && f.length_m ? ` · ${Math.round(f.length_m)} m` : ""}</li>`).join("");
+  const none = (what) => `<span class="hint">None drawn yet. Add ${what} on the <a href="#plan/${p.id}/map">plan map</a>.</span>`;
+  const sum = (kind) => feats.filter((f) => f.kind === kind).reduce((a, f) => a + (f.area_ha || 0), 0);
+  switch (src) {
+    case "plan_name": return esc(p.name);
+    case "ignition_units": { const l = list("ignition_unit", "ha"); return l ? `<ul>${l}</ul>` : none("ignition units"); }
+    case "location": return p.centroid ? `Centre ${p.centroid.lat}, ${p.centroid.lon} · ${esc(p.centroid.utm)}` : none("the burn unit");
+    case "size": return sum("burn_unit") ? `Burn unit ${sum("burn_unit").toFixed(1)} ha${sum("contingency_area") ? ` · contingency area ${(sum("contingency_area") - sum("burn_unit")).toFixed(1)} ha outside the unit` : ""}` : none("the burn unit");
+    case "fuels": return S.overlay.fuels.length ? `<table class="grid"><thead><tr><th>Fuel class</th><th class="num">Burn unit ha</th><th class="num">Contingency ha</th></tr></thead><tbody>${S.overlay.fuels.map((f) => `<tr><td>${esc(f.fuel_class)}</td><td class="num">${f.unit_ha ?? 0}</td><td class="num">${f.contingency_ha ?? 0}</td></tr>`).join("")}</tbody></table>` : '<span class="hint">No fuel classes under the unit.</span>';
+    case "values": {
+      const v = S.overlay.features.map((f) => f.properties).filter((x) => !["fuels.fuel_class", "ops.road", "ops.fireguard"].includes(x.layer));
+      const title = (n) => (S.layers.find((l) => l.name === n) || {}).title || n;
+      return v.length ? `<table class="grid"><thead><tr><th>Value</th><th>Layer</th><th>Detail</th><th>Where</th></tr></thead><tbody>${v.map((x) => `<tr><td>${esc(x.name || x.species || x.kind || "")}${x.grid_id ? " · " + esc(x.grid_id) : ""}</td><td>${esc(title(x.layer))}</td><td>${esc(x.vulnerability || x.measure || x.status || "")}</td><td>${x.zone}</td></tr>`).join("")}</tbody></table>` : '<span class="hint">Nothing recorded in the unit or contingency area.</span>';
+    }
+    case "receptors": return p.receptors.length ? `<table class="grid"><thead><tr><th>Receptor</th><th>Type</th><th>Sensitivity</th><th class="num">km</th><th class="num">Bearing</th></tr></thead><tbody>${p.receptors.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.kind || "")}</td><td>${esc(r.sensitivity || "")}</td><td class="num">${r.km}</td><td class="num">${r.bearing}°</td></tr>`).join("")}</tbody></table>` : '<span class="hint">No receptors within 40 km in the database.</span>';
+    case "test_fire_site": { const l = list("test_fire_site"); return l ? `<ul>${l}</ul>` : none("a test fire site"); }
+    case "holding_lines": { const h = list("holding_line", "m"), c = list("contingency_line", "m"); return h || c ? `<b>Holding</b><ul>${h || "<li>none</li>"}</ul><b>Contingency</b><ul>${c || "<li>none</li>"}</ul>` : none("holding lines"); }
+    case "trigger_points": { const l = list("trigger_point"); return l ? `<ul>${l}</ul>` : none("trigger points"); }
+    case "cost_total": { const t = (live.costs || []).reduce((a, r) => a + (+r.amount || 0), 0); return `$${t.toLocaleString()}`; }
+    case "mbca": {
+      const w = (live.windows || []).filter((r) => r.from && r.to);
+      if (!w.length) return '<span class="hint">Add burn windows to check them.</span>';
+      const bad = w.filter((r) => { const md = (d) => d.slice(5); return !(md(r.to) < "05-15" || md(r.from) > "08-15") || r.from.slice(0, 4) !== r.to.slice(0, 4); });
+      return bad.length ? `<span class="warn">${bad.length} window${bad.length > 1 ? "s overlap" : " overlaps"} May 15 – Aug 15 (no prescribed ignition at Shilo during the MBCA period).</span>` : '<span class="ok">No window overlaps May 15 – Aug 15.</span>';
+    }
+    case "complexity_summary": {
+      const rows = live.elements || []; const c = (k) => ({ low: 0, moderate: 0, high: 0, ...rows.reduce((a, r) => (r[k] ? { ...a, [r[k]]: (a[r[k]] || 0) + 1 } : a), {}) });
+      const r = c("post_risk"), d = c("difficulty"), rated = rows.filter((x) => x.post_risk && x.difficulty).length;
+      return `${rated} of ${rows.length} elements rated. Post-plan risk: ${r.high} high, ${r.moderate} moderate, ${r.low} low. Technical difficulty: ${d.high} high, ${d.moderate} moderate, ${d.low} low.
+        <div class="hint">Use the PMS 424-1 worksheet to calculate the summary rating; the agency administrator sets the final rating below.</div>`;
+    }
+  }
+  return "";
+}
+
+function renderElement(main, code, lock) {
+  const d = S.defs.find((x) => x.code === code) || S.defs[0];
+  const e = S.plan.elements[d.code] || { content: {}, status: "empty" };
+  const ro = locked() || !can("planner");
+  const known = new Set(d.fields.map((f) => f.key));
+  const legacy = Object.entries(e.content || {}).filter(([k, v]) => !known.has(k) && v);
+  main.innerHTML = `<div class="doc">${lock}
+    <div class="el-headbar"><div><div class="owner">${/^\d/.test(d.code) ? "Element " + d.code : "Appendix " + d.code} · drafted by ${d.owner_role.replace("_", " ")}</div><h2 class="doc-title">${esc(d.title)}</h2></div>
+      <div class="el-actions">${ro ? `<span class="badge ${e.status === "complete" ? "approved" : "draft"}">${e.status}</span>` : `<label class="hint" for="est">Status</label><select id="est"><option value="draft">Draft</option><option value="complete">Complete</option></select>
+        <button class="btn primary" id="esave">Save</button>`}</div></div>
+    ${d.guidance ? `<p class="hint">${esc(d.guidance)}</p>` : ""}
+    ${d.map ? '<div class="map-slot small" id="mslot"></div>' : ""}
+    <form id="ef" class="ef" onsubmit="return false"></form>
+    ${legacy.length ? `<div class="legacy"><b>Text from the earlier version of this element</b> <span class="hint">(kept with the plan; copy it into the fields above)</span>${legacy.map(([k, v]) => `<p><b>${esc(k)}</b>: ${esc(typeof v === "string" ? v : JSON.stringify(v))}</p>`).join("")}</div>` : ""}
+    <div class="row-actions"><button type="button" class="btn small" id="ehist">History</button><span class="hint">${e.updated_at ? "Last saved " + e.updated_at.slice(0, 16).replace("T", " ") + " by " + esc(e.updated_by) : "Not saved yet"}</span></div><div id="hist"></div></div>`;
+  if (d.map) placeMap("mslot");
+  const form = document.getElementById("ef");
+  const refreshAuto = () => { const live = read(); form.querySelectorAll(".auto[data-src]").forEach((a) => (a.innerHTML = autoHtml(a.dataset.src, live))); };
+  const read = Forms.render(form, d.fields, e.content, ro, { onChange: () => { S.dirty = true; const b = document.getElementById("esave"); if (b) b.textContent = "Save*"; refreshAuto(); } });
+  refreshAuto();
+  form.querySelectorAll(".component").forEach((c) => {
+    const box = document.createElement("div"); c.appendChild(box);
+    ({ prescription: panelRx, variants: panelVariants, signatures: panelSignatures })[c.dataset.component](box);
+  });
+  const st = document.getElementById("est"); if (st) st.value = e.status === "complete" ? "complete" : "draft";
+  if (st) st.onchange = () => { S.dirty = true; };
+  const save = async () => {
+    const content = { ...Object.fromEntries(legacy), ...read() };
+    await call(() => RX.api(`/api/plans/${S.plan.id}/elements/${d.code}`, { method: "PUT", body: { content, status: st.value } }));
+    S.plan.elements[d.code] = { content, status: st.value, updated_at: new Date().toISOString(), updated_by: S.user.username };
+    S.dirty = false; toast(`${d.code}. ${d.title}: saved`); renderNav(); renderMain();
+  };
+  const sv = document.getElementById("esave"); if (sv) sv.onclick = save;
+  main.onkeydown = (ev) => { if ((ev.ctrlKey || ev.metaKey) && ev.key === "s" && sv) { ev.preventDefault(); save(); } };
+  document.getElementById("ehist").onclick = async () => {
+    const h = await call(() => RX.api(`/api/plans/${S.plan.id}/elements/${d.code}/history`));
+    document.getElementById("hist").innerHTML = `<h4>Saved versions</h4>` + (h.map((r) => `<details><summary class="hint">${r.saved_at.slice(0, 16).replace("T", " ")} · ${esc(r.saved_by)} · ${r.status}</summary><pre class="hist">${esc(JSON.stringify(r.content, null, 1))}</pre></details>`).join("") || '<p class="hint">No saves yet.</p>');
+  };
 }
 
 function renderBar() {
@@ -207,55 +324,6 @@ async function onDrawn(e) {
   const label = prompt(`Label for this ${RX.KINDS[kind].label.toLowerCase()}`, "") ?? "";
   await call(() => RX.api(`/api/plans/${S.plan.id}/features`, { method: "POST", body: { kind, label, geom: gj } }));
   toast("Saved"); showPlan(S.plan.id);
-}
-
-// --- tabs --------------------------------------------------------------------------------
-const TABS = [["elements", "Elements"], ["features", "Map features"], ["values", "Values & fuels"], ["rx", "Prescription"],
-              ["variants", "Ignition variants"], ["visits", "Site visits"], ["burn", "Burn days"], ["versions", "Versions"]];
-function renderTabs() {
-  const t = document.getElementById("tabs");
-  t.innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" data-tab="${k}">${l}</button>`).join("");
-  t.querySelectorAll("button").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderTabs(); renderPanel(); }));
-}
-function renderPanel() {
-  const el = document.getElementById("panel");
-  const lockNote = locked() ? `<div class="locked">This plan is ${S.plan.status}. It is locked: use <b>Amend</b> to make a new version.</div>` : "";
-  const fn = { elements: panelElements, features: panelFeatures, values: panelValues, rx: panelRx, variants: panelVariants, visits: panelVisits, burn: panelBurn, versions: panelVersions }[S.tab];
-  el.innerHTML = lockNote; fn(el);
-}
-
-// Elements
-function panelElements(root) {
-  const els = S.plan.elements;
-  const d = S.defs.find((x) => x.code === S.el) || S.defs[0];
-  const e = els[d.code] || { content: {}, status: "empty" };
-  const ro = locked() || !can("planner");
-  root.insertAdjacentHTML("beforeend", `<div class="el-list" role="list">${S.defs.map((x) => {
-    const st = (els[x.code] || {}).status || "empty";
-    return `<button class="el-chip" data-code="${x.code}" aria-current="${x.code === d.code}" title="${esc(x.title)} (${st})">${x.code}<span class="dot ${st}"></span></button>`; }).join("")}</div>
-    <div class="el-legend"><span><span class="dot"></span>empty</span><span><span class="dot draft"></span>draft</span><span><span class="dot complete"></span>complete</span>
-      <span style="flex:1"></span><span>${Object.values(els).filter((e) => e.status === "complete").length} of ${S.defs.length} complete</span></div>
-    <div class="el-edit"><h3>${d.code}. ${esc(d.title)}</h3><div class="owner" style="margin-bottom:4px">Drafted by: ${d.owner_role.replace("_", " ")}</div><p class="hint">${esc(d.guidance || "")}</p>
-    ${d.sections.map((s) => `<div class="field"><label for="s-${s.key}">${esc(s.label)}</label>
-      <textarea id="s-${s.key}" data-key="${s.key}" ${ro ? "readonly" : ""}>${esc(e.content[s.key] || "")}</textarea></div>`).join("")}
-    <div class="row-actions">${ro ? "" : `<label class="hint">Status <select id="est"><option value="draft">Draft</option><option value="complete">Complete</option></select></label>
-      <button class="btn primary" id="esave">Save element</button>`}
-      <button class="btn small" id="ehist">History</button><span class="hint">${e.updated_at ? "Last saved " + e.updated_at.slice(0, 16).replace("T", " ") + " by " + esc(e.updated_by) : ""}</span></div>
-    <div id="hist"></div></div>`);
-  root.querySelectorAll(".el-chip").forEach((b) => (b.onclick = () => { S.el = b.dataset.code; renderPanel(); }));
-  const st = document.getElementById("est"); if (st) st.value = e.status === "complete" ? "complete" : "draft";
-  const sv = document.getElementById("esave");
-  if (sv) sv.onclick = async () => {
-    const content = {}; root.querySelectorAll("textarea[data-key]").forEach((t) => (content[t.dataset.key] = t.value));
-    await call(() => RX.api(`/api/plans/${S.plan.id}/elements/${d.code}`, { method: "PUT", body: { content, status: st.value } }));
-    S.plan.elements[d.code] = { content, status: st.value, updated_at: new Date().toISOString(), updated_by: S.user.username };
-    toast(`Element ${d.code} saved`); renderPanel();
-  };
-  document.getElementById("ehist").onclick = async () => {
-    const h = await call(() => RX.api(`/api/plans/${S.plan.id}/elements/${d.code}/history`));
-    document.getElementById("hist").innerHTML = `<h4>Saved versions</h4>` + (h.map((r) => `<details><summary class="hint">${r.saved_at.slice(0, 16).replace("T", " ")} · ${esc(r.saved_by)} · ${r.status}</summary>
-      ${Object.entries(r.content).map(([k, v]) => `<p class="hint"><b>${esc(k)}</b>: ${esc(v)}</p>`).join("")}</details>`).join("") || '<p class="hint">No saves yet.</p>');
-  };
 }
 
 // Map features
@@ -467,7 +535,7 @@ async function openBurnDay(id) {
   const save = (decision) => async () => {
     if (decision === "go" && !confirm("Record a GO decision for this burn day?")) return;
     await call(() => RX.api(`/api/burn-days/${id}`, { method: "PUT", body: body(decision) })); toast("Burn day saved");
-    if (decision) { await showPlan(S.plan.id); S.tab = "burn"; renderTabs(); renderPanel(); } openBurnDay(id);
+    if (decision) { await showPlan(S.plan.id, "burn"); } openBurnDay(id);
   };
   document.getElementById("bdsave").onclick = save();
   const g = document.getElementById("bdgo"); if (g) g.onclick = save("go");
@@ -484,10 +552,15 @@ function panelVersions(root) {
     ${p.versions.map((v) => `<tr><td>v${v.version_no}</td><td><span class="badge ${v.status}">${v.status}</span></td><td>${esc(v.amendment_note || "")}</td>
       <td>${v.id === p.id ? "<b>this</b>" : `<a href="#plan/${v.id}">open</a>`}</td></tr>`).join("")}
     ${p.successor ? `<tr><td colspan="3">A newer version exists.</td><td><a href="#plan/${p.successor.id}">open</a></td></tr>` : ""}</tbody></table>
-    <h4>Signatures (Element 1)</h4>${p.signatures.map((s) => `<div class="feat"><span class="lbl">${esc(s.role.replace(/_/g, " "))}: <b>${esc(s.name)}</b> ${esc(s.qualification || "")}</span><span class="m">${s.signed_at.slice(0, 10)}</span></div>`).join("") || '<p class="hint">None recorded.</p>'}
+    <h4>Signatures (Element 1)</h4><div id="sigbox"></div>`);
+  panelSignatures(document.getElementById("sigbox"));
+}
+function panelSignatures(root) {
+  const p = S.plan;
+  root.insertAdjacentHTML("beforeend", `${p.signatures.map((s) => `<div class="feat"><span class="lbl">${esc(s.role.replace(/_/g, " "))}: <b>${esc(s.name)}</b> ${esc(s.qualification || "")}</span><span class="m">${s.signed_at.slice(0, 10)}</span></div>`).join("") || '<p class="hint">None recorded.</p>'}
     ${can("planner") ? `<form id="sig" class="row-actions"><select name="role"><option value="preparer">Preparer</option><option value="technical_reviewer">Technical reviewer</option><option value="agency_administrator">Agency administrator</option><option value="burn_boss">Burn boss</option></select>
       <input name="sname" placeholder="Name" required style="flex:1;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><input name="qual" placeholder="Qualification" style="width:110px;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><button class="btn small">Record</button></form>` : ""}`);
-  const f = document.getElementById("sig");
+  const f = root.querySelector("#sig");
   if (f) f.onsubmit = async (e) => { e.preventDefault(); await call(() => RX.api(`/api/plans/${p.id}/signatures`, { method: "POST", body: { role: f.role.value, name: f.sname.value, qualification: f.qual.value } })); showPlan(p.id); };
 }
 

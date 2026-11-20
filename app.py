@@ -20,6 +20,7 @@ import db
 import export_docx
 import field
 import forecast
+import schema
 
 ROOT = Path(__file__).resolve().parent
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s: %(message)s")
@@ -97,7 +98,11 @@ def me(user=Depends(auth.current_user)):
 # --- catalogue -----------------------------------------------------------------
 @app.get("/api/element-defs")
 def element_defs(user=Depends(auth.current_user)):
-    return db.all("select code, ord, title, owner_role, guidance, sections from plans.element_def order by ord")
+    rows = db.all("select code, ord, title, owner_role, guidance from plans.element_def order by ord")
+    for r in rows:
+        r["fields"] = schema.fields(r["code"])
+        r["map"] = schema.has_map(r["code"])
+    return rows
 
 
 @app.get("/api/layers")
@@ -306,6 +311,17 @@ def plan_get(pid: int, user=Depends(auth.current_user)):
                                  union all select p.id, p.parent_plan_id, p.version_no, p.status, p.amendment_note from plans.plan p join up on p.id = up.parent_plan_id)
            select id, version_no, status, amendment_note from up order by version_no""", (pid,))]
     p["successor"] = db.one("select id from plans.plan where parent_plan_id = %s", (pid,))
+    c = db.one("""with u as (select ST_Centroid(ST_Union(geom)) g from plans.feature where plan_id = %s and kind = 'burn_unit')
+                  select ST_Y(g) lat, ST_X(g) lon, ST_X(ST_Transform(g, 32614)) e, ST_Y(ST_Transform(g, 32614)) n from u where g is not null""", (pid,))
+    p["centroid"] = {"lat": round(c["lat"], 5), "lon": round(c["lon"], 5), "utm": f"14U {c['e']:.0f} E {c['n']:.0f} N"} if c else None
+    # smoke receptors within 40 km, with distance and bearing from the unit
+    p["receptors"] = [db._plain(r) for r in db.all("""
+        with u as (select ST_Centroid(ST_Union(geom)) g from plans.feature where plan_id = %s and kind = 'burn_unit'),
+             k as (select coalesce(as_of, now()) t from plans.plan where id = %s)
+        select r.name, r.kind, r.sensitivity, round((ST_Distance(r.geom::geography, u.g::geography)/1000)::numeric, 1) km,
+               round(degrees(ST_Azimuth(u.g, r.geom))::numeric) bearing
+        from smoke.receptor r, u, k where r.recorded @> k.t and r.valid @> k.t and ST_DWithin(r.geom::geography, u.g::geography, 40000)
+        order by km""", (pid, pid))] if c else []
     return p
 
 
@@ -605,7 +621,7 @@ def plan_export(pid: int, user=Depends(auth.current_user)):
     plan = plan_get(pid, user)
     defs = element_defs(user)
     overlay = plan_overlay(pid, user)
-    data = export_docx.render(plan, defs, overlay)
+    data = export_docx.render(plan, defs, overlay, plan_features(pid, user))
     fname = re.sub(r"[^A-Za-z0-9_-]+", "_", plan["name"]) + f"_v{plan['version_no']}.docx"
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})

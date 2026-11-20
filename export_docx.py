@@ -22,7 +22,7 @@ def _rng(lo, hi):
     return "—"
 
 
-def render(plan, defs, overlay):
+def render(plan, defs, overlay, features=None):
     doc = Document()
     st = doc.styles["Normal"]
     st.font.name = "Calibri"
@@ -47,68 +47,112 @@ def render(plan, defs, overlay):
     meta.alignment = WD_ALIGN_PARAGRAPH.CENTER
 
     els = plan.get("elements", {})
+    feats = [f["properties"] for f in (features or {}).get("features", [])]
+
+    def table(headers, rows):
+        t = doc.add_table(rows=1, cols=len(headers))
+        t.style = "Table Grid"
+        for i, h in enumerate(headers):
+            t.rows[0].cells[i].text = h
+            for r in t.rows[0].cells[i].paragraphs[0].runs:
+                r.bold = True
+        for row in rows:
+            cells = t.add_row().cells
+            for i, v in enumerate(row):
+                cells[i].text = "" if v is None else (("yes" if v else "no") if isinstance(v, bool) else str(v))
+        doc.add_paragraph()
+
+    def kv(label, value):
+        para = doc.add_paragraph()
+        r = para.add_run(f"{label}: ")
+        r.bold = True
+        para.add_run(value if value not in (None, "", []) else "[not given]")
+
+    def auto(src, content):
+        flist = lambda kind: [f for f in feats if f.get("kind") == kind]
+        if src == "plan_name":
+            return plan["name"]
+        if src == "ignition_units":
+            return ", ".join(f"{f.get('label')} ({f.get('area_ha')} ha)" for f in flist("ignition_unit")) or "none drawn"
+        if src == "location":
+            c = plan.get("centroid")
+            return f"{c['lat']}, {c['lon']} ({c['utm']})" if c else "not drawn"
+        if src == "size":
+            return f"{sum(f.get('area_ha') or 0 for f in flist('burn_unit')):.1f} ha"
+        if src in ("test_fire_site", "trigger_points"):
+            return ", ".join(f.get("label") or "" for f in flist(src[:-1] if src.endswith("s") else src)) or "none drawn"
+        if src == "holding_lines":
+            return "; ".join(f"{f.get('label')} ({round(f.get('length_m') or 0)} m)" for f in flist("holding_line")) or "none drawn"
+        if src == "cost_total":
+            return f"${sum((r.get('amount') or 0) for r in content.get('costs') or []):,.0f}"
+        return None
+
     for d in defs:
-        doc.add_heading(f"{'Element ' if d['code'][0].isdigit() else ''}{d['code']}: {d['title']}" if d['code'][0].isdigit() else d["title"], level=1)
-        e = els.get(d["code"])
-        content = (e or {}).get("content") or {}
-        auto = {}
-        if d["code"] == "1":
-            auto = {"admin_unit": plan.get("admin_unit"), "burn_name": plan.get("name"), "ignition_unit": plan.get("unit_name"),
-                    "complexity": plan.get("complexity"), "min_rxb": plan.get("min_burn_boss")}
-        for s in d["sections"]:
-            doc.add_heading(s["label"], level=2)
-            txt = (content.get(s["key"]) or auto.get(s["key"]) or "").strip()
-            doc.add_paragraph(txt if txt else "[not yet written]")
-        if d["code"] == "1" and plan.get("signatures"):
-            tbl = doc.add_table(rows=1, cols=4)
-            tbl.style = "Table Grid"
-            for i, h in enumerate(["Role", "Name", "Qualification", "Signed"]):
-                tbl.rows[0].cells[i].text = h
-            for s in plan["signatures"]:
-                row = tbl.add_row().cells
-                row[0].text, row[1].text, row[2].text, row[3].text = s["role"], s["name"], s.get("qualification") or "", s["signed_at"][:16]
-        if d["code"] == "4" and overlay.get("fuels"):
-            doc.add_paragraph("Fuel classes from the fuels layer (ha):")
-            tbl = doc.add_table(rows=1, cols=3)
-            tbl.style = "Table Grid"
-            for i, h in enumerate(["Fuel class", "Burn unit", "Contingency area"]):
-                tbl.rows[0].cells[i].text = h
-            for f in overlay["fuels"]:
-                row = tbl.add_row().cells
-                row[0].text, row[1].text, row[2].text = str(f["fuel_class"]), str(f.get("unit_ha") or 0), str(f.get("contingency_ha") or 0)
-        if d["code"] == "4":
-            vals = [f["properties"] for f in overlay.get("features", []) if f["properties"]["layer"] in ("infra.asset", "habitat.critical_habitat", "habitat.sensitive_feature")]
-            if vals:
-                doc.add_paragraph("Values in the unit and contingency area (from the database):")
-                tbl = doc.add_table(rows=1, cols=3)
-                tbl.style = "Table Grid"
-                for i, h in enumerate(["Value", "Type", "Where"]):
-                    tbl.rows[0].cells[i].text = h
-                for v in vals:
-                    row = tbl.add_row().cells
-                    row[0].text = str(v.get("name") or v.get("species") or v.get("grid_id") or "")
-                    row[1].text = str(v.get("asset_type") or v.get("kind") or v.get("status") or "")
-                    row[2].text = v["zone"]
-        if d["code"] == "7" and plan.get("prescription"):
-            tbl = doc.add_table(rows=1, cols=3)
-            tbl.style = "Table Grid"
-            for i, h in enumerate(["Parameter", "Range", "Note"]):
-                tbl.rows[0].cells[i].text = h
-            for p in plan["prescription"]:
-                row = tbl.add_row().cells
-                row[0].text = PARAM_LABELS.get(p["param"], p["param"])
-                row[1].text = _rng(p.get("low"), p.get("high"))
-                row[2].text = p.get("note") or ""
-        if d["code"] == "15" and plan.get("variants"):
-            doc.add_heading("Ignition variants by wind direction", level=2)
-            for v in plan["variants"]:
-                doc.add_paragraph(f"{v['name']}: wind from {v['wind_dir_min']:g}° to {v['wind_dir_max']:g}°. {v.get('description') or ''}", style="List Bullet")
-                for i, s in enumerate(v.get("firing_sequence") or [], 1):
-                    doc.add_paragraph(f"{i}. {s.get('step', '')}")
-        if d["code"] == "19":
-            rec = [f["properties"] for f in overlay.get("features", []) if f["properties"]["layer"] == "smoke.receptor"]
-            if rec:
-                doc.add_paragraph("Receptors near the unit: " + "; ".join(f"{r['name']} ({r.get('sensitivity')})" for r in rec))
+        title = f"Element {d['code']}: {d['title']}" if d["code"][0].isdigit() else d["title"]
+        doc.add_heading(title, level=1)
+        e = els.get(d["code"]) or {}
+        content = e.get("content") or {}
+        known = set()
+        for f in d["fields"]:
+            known.add(f["key"])
+            t, label, v = f["type"], f.get("label", ""), content.get(f["key"], f.get("default"))
+            if t == "info":
+                continue
+            if t == "auto":
+                src = f["source"]
+                if src == "fuels" and overlay.get("fuels"):
+                    doc.add_heading(label, level=2)
+                    table(["Fuel class", "Burn unit ha", "Contingency ha"], [[x["fuel_class"], x.get("unit_ha") or 0, x.get("contingency_ha") or 0] for x in overlay["fuels"]])
+                elif src == "values":
+                    vals = [x["properties"] for x in overlay.get("features", []) if x["properties"]["layer"] not in ("fuels.fuel_class", "ops.road", "ops.fireguard")]
+                    if vals:
+                        doc.add_heading(label, level=2)
+                        table(["Value", "Layer", "Detail", "Where"], [[x.get("name") or x.get("species") or x.get("kind"), x["layer"], x.get("vulnerability") or x.get("measure") or x.get("status") or "", x["zone"]] for x in vals])
+                elif src == "receptors":
+                    if plan.get("receptors"):
+                        doc.add_heading(label, level=2)
+                        table(["Receptor", "Type", "Sensitivity", "km", "Bearing °"], [[r["name"], r.get("kind"), r.get("sensitivity"), r["km"], r["bearing"]] for r in plan["receptors"]])
+                elif src in ("mbca", "complexity_summary"):
+                    continue
+                else:
+                    kv(label, auto(src, content))
+                continue
+            if t == "component":
+                comp = f["component"]
+                if comp == "signatures" and plan.get("signatures"):
+                    doc.add_heading(label, level=2)
+                    table(["Role", "Name", "Qualification", "Signed"], [[x["role"], x["name"], x.get("qualification") or "", x["signed_at"][:16]] for x in plan["signatures"]])
+                if comp == "prescription" and plan.get("prescription"):
+                    doc.add_heading(label, level=2)
+                    table(["Parameter", "Range", "Note"], [[PARAM_LABELS.get(x["param"], x["param"]), _rng(x.get("low"), x.get("high")), x.get("note") or ""] for x in plan["prescription"]])
+                if comp == "variants" and plan.get("variants"):
+                    doc.add_heading(label, level=2)
+                    for vv in plan["variants"]:
+                        doc.add_paragraph(f"{vv['name']}: wind from {vv['wind_dir_min']:g}° to {vv['wind_dir_max']:g}°. {vv.get('description') or ''}", style="List Bullet")
+                        for i, st in enumerate(vv.get("firing_sequence") or [], 1):
+                            doc.add_paragraph(f"{i}. {st.get('step', '')}")
+                continue
+            if t == "textarea":
+                doc.add_heading(label, level=2)
+                doc.add_paragraph(v.strip() if isinstance(v, str) and v.strip() else "[not yet written]")
+            elif t == "multi":
+                kv(label, ", ".join(v or []))
+            elif t == "bool":
+                kv(label, "yes" if v else "no")
+            elif t == "table":
+                rows = v if isinstance(v, list) else []
+                if rows:
+                    doc.add_heading(label, level=2)
+                    table([c["label"] for c in f["columns"]], [[r.get(c["key"]) for c in f["columns"]] for r in rows])
+            elif t == "checklist":
+                vv = v or {}
+                doc.add_heading(label, level=2)
+                table(["Item", "Answer", "Note"], [[l, (vv.get(k) or {}).get("a") or "", (vv.get(k) or {}).get("note") or ""] for k, l in f["items"]])
+            else:
+                kv(label, "" if v is None else str(v))
+        for k, v in content.items():
+            if k not in known and v:
+                doc.add_paragraph(f"{k}: {v if isinstance(v, str) else v}")
     buf = io.BytesIO()
     doc.save(buf)
     return buf.getvalue()

@@ -8,7 +8,9 @@ infrastructure, critical habitat, sensitive features and smoke receptors. Compan
 - **Burn program** (`/`): every burn block on one map, coloured by plan status, with area, window,
   last fire on record, site visits and plan progress. **Add burn block** draws a new block and opens
   its fire plan.
-- **Fire plan view** (`/#plan/<id>`): map workspace, the 21 elements plus appendices A–F, map features,
+- **Fire plan view** (`/#plan/<id>`): the elements listed down the left with their status, the selected
+  element on the right as a structured form (tables, checklists, pick lists; fields filled from the
+  map and database are shown read-only), with the plan map above spatial elements. Also: plan map, the 21 elements plus appendices A–F, map features,
   values and fuels, prescription, ignition variants, burn days, versions and signatures, Word export.
 - **Mobile** (`/m`): the burn program map (tap a block to open it), then the plan for the field. GPS position, layers, ignition steps,
   values, every element. The last plan opened is kept on the device and works offline; map tiles you
@@ -34,6 +36,14 @@ monitoring or fuel surveys.
 
 Photos are stored under `RX_MEDIA_DIR` (default `media/` in the app folder) and copied nightly to
 `/var/backups/rx/media`.
+
+## Element forms
+
+Each element's fields are defined in `schema.py` (field types: text, textarea, number, date, time,
+select, multi, bool, table, checklist, auto, component). Element 3 follows the 14 PMS 424 complexity
+elements; 7 holds the prescription parameters; 15 the ignition variants; 1 the signatures. Content
+is stored as JSON per element; text saved under the old free-text layout is kept and shown under
+the form. The Word export follows the same schema.
 
 ## Data model
 
