@@ -13,6 +13,7 @@ const Forms = (() => {
   const select = (name, options, value, ro) => `<select name="${name}" ${ro ? "disabled" : ""}><option value=""></option>${options.map((o) => `<option ${o === value ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`;
 
   function cell(col, value, ro) {
+    if (col.list) return input(col.type, col.key, value, ro, `aria-label="${esc(col.label)}" list="dl-${col.list}"`);
     if (col.type === "fixed") return `<span class="fixed">${esc(value)}</span>`;
     if (col.type === "select") return select(col.key, col.options, value, ro);
     if (col.type === "bool") return `<input type="checkbox" name="${col.key}" ${value ? "checked" : ""} ${ro ? "disabled" : ""} aria-label="${esc(col.label)}">`;
@@ -26,7 +27,7 @@ const Forms = (() => {
     const lab = f.label ? `<label class="flabel" for="${id}">${esc(f.label)}</label>` : "";
     switch (f.type) {
       case "info": return `<p class="hint info">${esc(f.text)}</p>`;
-      case "auto": return `<div class="ff" data-auto="${f.source}"><span class="flabel">${esc(f.label)} <span class="auto-tag">${["complexity_summary", "cost_total", "mbca"].includes(f.source) ? "calculated" : "from the map and database"}</span></span><div class="auto" data-src="${f.source}"></div></div>`;
+      case "auto": return `<div class="ff" data-auto="${f.source}"><span class="flabel">${esc(f.label)} <span class="auto-tag">${f.tag || (["complexity_summary", "cost_total", "mbca"].includes(f.source) ? "calculated" : "from the map and database")}</span></span><div class="auto" data-src="${f.source}"></div></div>`;
       case "component": return `<div class="ff"><span class="flabel">${esc(f.label)}</span><div class="component" data-component="${f.component}"></div></div>`;
       case "select": return `<div class="ff" data-key="${f.key}" data-type="select">${lab}${select(f.key, f.options, val, ro).replace("<select", `<select id="${id}"`)}</div>`;
       case "multi": return `<div class="ff" data-key="${f.key}" data-type="multi"><span class="flabel">${esc(f.label)}</span><div class="chips">${f.options.map((o) => `<label class="chipbox"><input type="checkbox" value="${esc(o)}" ${(val || []).includes(o) ? "checked" : ""} ${ro ? "disabled" : ""}><span>${esc(o)}</span></label>`).join("")}</div></div>`;
@@ -34,7 +35,7 @@ const Forms = (() => {
       case "table": {
         const rows = Array.isArray(val) ? val : (f.rows || []);
         const fixedRows = f.fixed ? (f.rows || []).map((fr) => ({ ...fr, ...(rows.find((r) => r[f.columns[0].key] === fr[f.columns[0].key]) || {}) })) : rows;
-        return `<div class="ff" data-key="${f.key}" data-type="table"><span class="flabel">${esc(f.label)}</span><div class="tscroll"><table class="grid ftable"><thead><tr>${f.columns.map((c) => `<th>${esc(c.label)}</th>`).join("")}${ro || f.fixed ? "" : "<th></th>"}</tr></thead>
+        return `<div class="ff" data-key="${f.key}" data-type="table"><span class="flabel">${esc(f.label)}</span><div class="tscroll"><table class="grid ftable"><thead><tr>${f.columns.map((c) => `<th${c.w ? ` style="width:${c.w}"` : ""}>${esc(c.label)}</th>`).join("")}${ro || f.fixed ? "" : "<th></th>"}</tr></thead>
           <tbody>${fixedRows.map((r) => rowHtml(f, r, ro)).join("")}</tbody></table></div>${ro || f.fixed ? "" : '<button type="button" class="btn small" data-addrow>Add row</button>'}</div>`;
       }
       case "checklist": {
@@ -44,7 +45,7 @@ const Forms = (() => {
           return `<div class="crow" data-item="${k}"><span class="cl">${esc(l)}</span><span class="seg small" role="radiogroup" aria-label="${esc(l)}">${YNA.map(([o, ol]) => `<label><input type="radio" name="${id}-${k}" value="${o}" ${a === o ? "checked" : ""} ${ro ? "disabled" : ""}><span>${ol}</span></label>`).join("")}</span>
             <input type="text" class="cnote" placeholder="Note" value="${esc(note)}" ${ro ? "readonly" : ""} aria-label="Note: ${esc(l)}"></div>`; }).join("")}</div></div>`;
       }
-      default: return `<div class="ff ${f.type === "textarea" ? "wide" : ""}" data-key="${f.key}" data-type="${f.type}">${lab}${input(f.type, f.key, val, ro, `id="${id}"`)}</div>`;
+      default: return `<div class="ff ${f.type === "textarea" ? "wide" : ""}" data-key="${f.key}" data-type="${f.type}">${lab}${input(f.type, f.key, val, ro, `id="${id}"${f.list ? ` list="dl-${f.list}"` : ""}`)}</div>`;
     }
   }
 

@@ -58,10 +58,43 @@ needed (before approval or ignition), a due date and who does it.
   export includes both. A work order (.csv) and GeoJSON (for GPS units) can be downloaded.
 - The specification is locked with the plan at approval; status updates continue.
 
+## Burn program: operation order, meetings, people
+
+The program view has four tabs: **Map**, **Op order**, **Meetings** and **People**.
+
+- **Op order.** Each season (year) has an operation order in the CFB Shilo OPORD layout: heading
+  (title, file number, references, distribution), situation, mission, execution (intent, phases with
+  dates, main effort, end state, groupings and tasks, coordinating instructions), service support,
+  command and signals, authorization and annexes. Three parts fill themselves in: the season's burn
+  blocks (Annex B), the resources the burn plans need (largest need of any one burn, from Element 11)
+  and the points of contact (from People). *New season* copies last year's order with dates cleared.
+  Export to Word, route it for signature, then **record the signature**: that locks the order, and
+  changes after that start a new revision. Every save is kept.
+- **People.** Name, rank, appointment, organization, phone, email and qualifications (RXB2, FIRB,
+  ICT4, FFT1, EMR, EOD, ...), reused on every burn; names are offered in Element 11, 12, 2A and the
+  signatures. Paste the points of contact from an existing order to add them in one go.
+- **Usual roles.** Who normally fills each role (burn boss, firing boss, holding boss, lookout, medic,
+  UXO advisor, Range Control liaison, agency administrator...). New burn plans start with these names
+  in Element 11. Element 11 checks each name against the qualification the position needs
+  (a higher burn boss qualification covers a lower one).
+- **Meetings.** Planning, coordination, briefings and after action reviews, for the program or one
+  burn block: attendees from People, agenda, notes, decisions and actions (owner, due, done). Open
+  actions across meetings are listed on the Meetings tab.
+- **Program file.** Names and phone numbers are not kept in this repository. A season's order, people
+  and usual roles can be loaded from a JSON file (Op order → *Load a program file*, burn boss or admin):
+
+  ```json
+  {"season": {"year": 2025, "op_name": "Op ...", "opord": {"situation": "...", "...": "..."},
+              "signed_name": "LCol ..., BComd", "signed_at": "2025-03-26"},
+   "people": [{"name": "...", "rank": "Maj", "appointment": "G3", "phone": "CSN ...", "poc": true}],
+   "role_defaults": {"burn_boss": "..."}}
+  ```
+
 ## Element forms
 
 Each element's fields are defined in `schema.py` (field types: text, textarea, number, date, time,
-select, multi, bool, table, checklist, auto, component). Element 3 follows the 14 PMS 424 complexity
+select, multi, bool, table, checklist, auto, component; text fields and table columns can offer
+the People list). Element 3 follows the 14 PMS 424 complexity
 elements; 7 holds the prescription parameters; 15 the ignition variants; 1 the signatures. Content
 is stored as JSON per element; text saved under the old free-text layout is kept and shown under
 the form. The Word export follows the same schema.

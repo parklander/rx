@@ -41,7 +41,7 @@ SCHEMA = {
     {"key": "recommendation", "label": "FMO / burn boss recommendation", "type": "select", "options": ["implement", "do not implement"]},
     {"key": "authorized_from", "label": "Ignition authorized from", "type": "date"},
     {"key": "authorized_to", "label": "Ignition authorized to", "type": "date"},
-    {"key": "administrator", "label": "Agency administrator", "type": "text"},
+    {"key": "administrator", "label": "Agency administrator", "type": "text", "list": "people"},
     {"key": "signed_on", "label": "Signed", "type": "date"},
   ],
   "2B": [
@@ -144,7 +144,8 @@ SCHEMA = {
   "11": [
     {"key": "positions", "label": "Positions", "type": "table", "columns": [
         {"key": "position", "label": "Position", "type": "select", "options": POSITIONS}, {"key": "qty", "label": "Qty", "type": "number"},
-        {"key": "name", "label": "Name(s)", "type": "text"}, {"key": "qualified", "label": "Qual. checked", "type": "bool"}]},
+        {"key": "name", "label": "Name(s)", "type": "text", "list": "people"}, {"key": "qualified", "label": "Qual. checked", "type": "bool"}]},
+    {"key": "quals_check", "label": "Qualification check (from People)", "type": "auto", "source": "quals_check", "tag": "checked against People"},
     {"key": "equipment", "label": "Equipment", "type": "table", "columns": [
         {"key": "type", "label": "Equipment", "type": "text"}, {"key": "qty", "label": "Qty", "type": "number"}, {"key": "note", "label": "Note", "type": "text"}],
      "rows": [{"type": "Type 6 engine"}, {"type": "Water tender"}, {"type": "UTV with slip-on"}, {"type": "Drip torches"}]},
@@ -156,7 +157,7 @@ SCHEMA = {
         {"key": "channel", "label": "Channel / name", "type": "text"}, {"key": "rx", "label": "RX", "type": "text"},
         {"key": "tx", "label": "TX", "type": "text"}, {"key": "tone", "label": "Tone", "type": "text"}]},
     {"key": "phones", "label": "Telephone", "type": "table", "columns": [
-        {"key": "who", "label": "Who", "type": "text"}, {"key": "number", "label": "Number", "type": "text"}],
+        {"key": "who", "label": "Who", "type": "text", "list": "people"}, {"key": "number", "label": "Number", "type": "text"}],
      "rows": [{"who": "Range Control"}, {"who": "Base Fire Department"}, {"who": "Burn boss"}, {"who": "Agency administrator"}, {"who": "Hospital"}]},
   ],
   "13": {"map": True, "fields": [
@@ -210,7 +211,7 @@ SCHEMA = {
   "18": [
     {"key": "who", "label": "Who declares a wildfire", "type": "text", "default": "Burn boss"},
     {"key": "when", "label": "When it is declared", "type": "textarea", "default": "When contingency actions fail to contain the fire within the contingency area, or the fire cannot be returned to prescription by the end of the next burn period."},
-    {"key": "ic", "label": "Incident commander", "type": "text"},
+    {"key": "ic", "label": "Incident commander", "type": "text", "list": "people"},
     {"key": "notifications", "label": "Notifications", "type": "table", "columns": [
         {"key": "party", "label": "Who", "type": "text"}, {"key": "how", "label": "How", "type": "text"}],
      "rows": [{"party": "Agency administrator"}, {"party": "Range Control"}, {"party": "Base Fire Department / dispatch"}, {"party": "Manitoba Wildfire Service"}]},
@@ -265,3 +266,90 @@ def fields(code):
 def has_map(code):
     s = SCHEMA.get(code)
     return isinstance(s, dict) and s.get("map", False)
+
+
+# --- Operation order for a burn season (program level) ------------------------------------------
+# Sections follow the CFB Shilo OPORD layout: heading, situation, mission, execution, service support,
+# command and signals, authorization. Defaults are starting wording to edit.
+OPORD = [
+  {"section": "Heading", "fields": [
+    {"key": "title", "label": "Title", "type": "text", "default": "Op [NAME] (RTA prescribed fire)"},
+    {"key": "file_number", "label": "File number", "type": "text", "default": "3000-1 (G3)"},
+    {"key": "drafted_by", "label": "Drafted by", "type": "text"},
+    {"key": "references", "label": "References", "type": "table", "columns": [
+        {"key": "ref", "label": "Ref", "type": "text", "w": "70px"}, {"key": "title", "label": "Document", "type": "text"}],
+     "rows": [{"ref": "A", "title": "Range Standing Orders"}, {"ref": "B", "title": "Wildland Fire Hazard Reduction Plan"},
+              {"ref": "C", "title": "PMS 484 – NWCG Standards for Prescribed Fire Planning and Implementation (2022)"}]},
+    {"key": "dist_action", "label": "Distribution: action", "type": "textarea"},
+    {"key": "dist_info", "label": "Distribution: info", "type": "textarea"},
+  ]},
+  {"section": "Situation", "fields": [
+    {"key": "situation", "label": "Situation", "type": "textarea",
+     "default": "The CFB Shilo Range and Training Area (RTA) covers about 40,000 ha of native mixed-grass prairie, forest, wetland and sand dunes, with species at risk and a network of firebreaks. Fine fuels build up between burns and raise the risk of wildfires that disrupt training and threaten sensitive sites. This season's prescribed fire operation reduces that risk while supporting prairie health and training."},
+  ]},
+  {"section": "Mission", "fields": [
+    {"key": "mission", "label": "Mission", "type": "textarea",
+     "default": "CFB Shilo will conduct prescribed fires in the RTA to reduce wildfire risk, improve native prairie health, and keep conditions that support military training and conservation."},
+  ]},
+  {"section": "Execution", "fields": [
+    {"key": "intent", "label": "Intent", "type": "textarea",
+     "default": "Conduct prescribed fire operations that limit wildfire impacts on training, protect sensitive sites and infrastructure, and keep nearby communities safe. This order sets out the resources, support and processes needed, and is updated each year."},
+    {"key": "phases", "label": "Scheme of manoeuvre", "type": "table", "columns": [
+        {"key": "phase", "label": "Phase", "type": "text", "w": "190px"}, {"key": "description", "label": "Description", "type": "textarea"},
+        {"key": "from", "label": "From", "type": "date", "w": "150px"}, {"key": "to", "label": "To", "type": "date", "w": "150px"}],
+     "rows": [{"phase": "1 – Planning", "description": "Prepare equipment and burn plans; notify the RTA user community, stakeholders and the public; environmental review and permits; contracts."},
+              {"phase": "2 – Conduct", "description": "Begins when the weather is within the burn prescriptions (Annex B). Burns in priority order (Annex C), booked through Range Control. Each fire is monitored until it is out."},
+              {"phase": "3 – Consolidation", "description": "Operations cease; demobilize; post-operation report and after action review; lessons learned into next season's plan."}]},
+    {"key": "main_effort", "label": "Main effort", "type": "textarea", "default": "Reduce the fine fuel load in the RTA."},
+    {"key": "end_state", "label": "End state", "type": "textarea", "default": "Fine fuel load reduced safely and responsibly, and all administrative tasks completed."},
+    {"key": "blocks", "label": "Planned burn blocks (Annex B)", "type": "auto", "source": "season_blocks", "tag": "from this season's burn plans"},
+    {"key": "groupings", "label": "Groupings and tasks", "type": "table", "columns": [
+        {"key": "group", "label": "Organization", "type": "text", "w": "200px"}, {"key": "tasks", "label": "Tasks", "type": "textarea"}],
+     "rows": [{"group": "SES", "tasks": "Overall OPI; planning and implementing; post-operation report"},
+              {"group": "Range Control", "tasks": "Bookings; fire monitoring; safety traces; airspace; UXO threat briefing"},
+              {"group": "G3 Ops", "tasks": "Coordinate additional resources; finance (O&M, SWE)"},
+              {"group": "RTAMS", "tasks": "Assist plan preparation; fire history; burn priorities; hazard assessment; fire effects monitoring; burn plans and maps (rx)"},
+              {"group": "PAO", "tasks": "Public, lodger units, media"},
+              {"group": "G4", "tasks": "Equipment support (dozers, discs, graders); fireguard maintenance; EOD support"},
+              {"group": "RPOU", "tasks": "Mowing burn perimeters; fire-suppression well maintenance"},
+              {"group": "MET / RTAMS", "tasks": "Daily met package; daily FWI and DSR"}]},
+    {"key": "resources", "label": "Resources required (from the burn plans, Element 11)", "type": "auto", "source": "season_resources", "tag": "largest need of any one burn"},
+    {"key": "timings", "label": "Timings", "type": "table", "columns": [
+        {"key": "when", "label": "When", "type": "text", "w": "220px"}, {"key": "what", "label": "What", "type": "text"}],
+     "rows": [{"what": "Planning complete"}, {"what": "Ignition operations"}, {"what": "Cease operations"}, {"what": "After action review complete"}]},
+    {"key": "locations", "label": "Locations", "type": "textarea", "default": "Range Control: [building]\nPlanned burn locations: Annex B"},
+    {"key": "uxo", "label": "UXO hazards", "type": "textarea", "default": "A qualified EOD operator sweeps travel corridors and escape routes used for each burn. All personnel receive a UXO threat briefing from Range Control."},
+    {"key": "environmental", "label": "Environmental", "type": "textarea", "default": "Best management practices are followed. No prescribed ignition May 15 – Aug 15 (Migratory Birds Convention Act)."},
+    {"key": "aar", "label": "After action report", "type": "textarea", "default": "On completion, a report shows completed burns, burns planned for next season and areas for improvement (Annex E)."},
+    {"key": "daily_plan", "label": "Daily activity plan", "type": "textarea", "default": "The daily plan for each burn block, with its risk assessment, is in its burn plan (Annex D)."},
+    {"key": "notification", "label": "RTA disruption notification", "type": "textarea", "default": "Range Control and PAO notify the user community, stakeholders and the public (Annex C)."},
+    {"key": "bookings", "label": "RTA bookings", "type": "textarea", "default": "Prescribed fire is prioritized for RTA bookings (Annex B). Range Control manages daily conflicts."},
+  ]},
+  {"section": "Service support", "fields": [
+    {"key": "dress", "label": "Dress", "type": "text", "default": "Wildland firefighting PPE"},
+    {"key": "transport", "label": "Transport", "type": "text", "default": "By each organization; recovery requests to Range Control"},
+    {"key": "rations", "label": "Rations", "type": "text", "default": "Field ration requests to Base Ops"},
+    {"key": "financial", "label": "Financial", "type": "text", "default": "Overtime coordinated by Base Ops"},
+    {"key": "medical", "label": "Medical", "type": "text", "default": "Treated on site; evacuation coordinated through Range Control"},
+  ]},
+  {"section": "Command and signals", "fields": [
+    {"key": "pocs", "label": "Points of contact (from People)", "type": "auto", "source": "season_pocs", "tag": "people marked as a point of contact"},
+    {"key": "comms", "label": "Communications plan", "type": "textarea"},
+  ]},
+  {"section": "Authorization", "fields": [
+    {"key": "auth_name", "label": "Name", "type": "text"},
+    {"key": "auth_rank", "label": "Rank", "type": "text"},
+    {"key": "auth_appointment", "label": "Appointment", "type": "text", "default": "Base Commander"},
+  ]},
+  {"section": "Annexes", "fields": [
+    {"key": "annexes", "label": "Annexes", "type": "table", "columns": [
+        {"key": "annex", "label": "Annex", "type": "text", "w": "70px"}, {"key": "title", "label": "Title", "type": "text"}],
+     "rows": [{"annex": "A", "title": "Map of the RTA and burn blocks"}, {"annex": "B", "title": "Burn parameters and planned burn locations"},
+              {"annex": "C", "title": "Priorities and notifications"}, {"annex": "D", "title": "Burn plans / daily activity plans"}, {"annex": "E", "title": "After action report"}]},
+  ]},
+]
+
+ROLES = [("burn_boss", "Burn boss", "RXB2"), ("firing_boss", "Firing boss", "FIRB"), ("holding_boss", "Holding boss", "HOLDING BOSS"),
+         ("lookout", "Lookout", "LOOKOUT"), ("medic", "Medic / EMR", "EMT / MEDIC"), ("uxo_advisor", "UXO advisor (EOD)", "UXO ADVISOR"),
+         ("range_control", "Range Control liaison", "RANGE CONTROL LIAISON"), ("agency_administrator", "Agency administrator", None),
+         ("technical_reviewer", "Technical reviewer", None), ("preparer", "Plan preparer", None)]

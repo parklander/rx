@@ -24,8 +24,11 @@ async function route() {
     document.getElementById("who").textContent = `${S.user.display_name} · ${S.user.role.replace("_", " ")}`;
     document.getElementById("logout").hidden = false;
     [S.defs, S.layers] = await Promise.all([RX.api("/api/element-defs"), RX.api("/api/layers")]);
+    await Program.loadPeople();
   }
   if (m) return showPlan(+m[1], m[2]);
+  const pg = location.hash.match(/^#program\/(opord|meetings|people)(?:\/(\d+))?/);
+  if (pg) return Program.show(pg[1], pg[2] ? +pg[2] : null);
   return showList();
 }
 window.addEventListener("hashchange", route);
@@ -56,7 +59,7 @@ async function showList() {
   const fc = await call(() => RX.api("/api/blocks"));
   const plans = await call(() => RX.api("/api/plans"));
   const noBlock = plans.filter((p) => p.area_ha == null && p.status !== "cancelled");
-  view.innerHTML = `<div class="ws-bar"><h2>Burn program</h2><span class="meta" id="pstats"></span><span class="spacer"></span>
+  view.innerHTML = `<div class="ws-bar"><h2>Burn program</h2>${Program.tabs("map")}<span class="meta" id="pstats"></span><span class="spacer"></span>
       ${can("planner") ? '<button class="btn primary small" id="addblock">Add burn block</button>' : ""}</div>
     <div class="ws"><div id="map"></div><div class="side"><div class="tabpanel" id="panel"></div></div></div>`;
   buildMap();
@@ -195,6 +198,14 @@ function autoHtml(src, live) {
       return `${s.total} job${s.total > 1 ? "s" : ""}: ${s.by_status.verified} verified, ${s.by_status.done} done, ${s.by_status.assigned} assigned, ${s.by_status.planned} planned.
         ${s.outstanding_for_ignition.length ? `<div class="warn">Not yet verified (needed before ignition): ${s.outstanding_for_ignition.map((w) => esc(w.title)).join(", ")}</div>` : ""}
         <div class="hint">Post-plan risk assumes this work is done. <a href="#plan/${p.id}/prep">Open pre-burn work ›</a></div>`;
+    }
+    case "quals_check": {
+      const rows = (live.positions || []).flatMap((r) => (r.name || "").split(/[,;/]/).map((n) => n.trim()).filter(Boolean).map((n) => ({ pos: r.position, n })));
+      if (!rows.length) return '<span class="hint">Add names to the positions to check them.</span>';
+      return `<table class="grid"><thead><tr><th>Position</th><th>Name</th><th>Needs</th><th>Recorded</th><th></th></tr></thead><tbody>${rows.map(({ pos, n }) => {
+        const q = Program.check(n, pos), cls = q.ok === true ? "ok" : q.ok === false ? "warn" : "hint";
+        return `<tr><td>${esc(pos || "")}</td><td>${esc(n)}</td><td>${esc(q.needs || "—")}</td><td>${esc(q.quals || "")}</td><td class="${cls}">${q.text}</td></tr>`; }).join("")}</tbody></table>
+        <div class="hint">Qualifications come from <a href="#program/people">People</a>. Record each person's quals there; a person can be the default for a role (e.g. burn boss) on every new plan.</div>`;
     }
     case "cost_total": { const t = (live.costs || []).reduce((a, r) => a + (+r.amount || 0), 0); return `$${t.toLocaleString()}`; }
     case "mbca": {
@@ -583,7 +594,7 @@ function panelSignatures(root) {
   const p = S.plan;
   root.insertAdjacentHTML("beforeend", `${p.signatures.map((s) => `<div class="feat"><span class="lbl">${esc(s.role.replace(/_/g, " "))}: <b>${esc(s.name)}</b> ${esc(s.qualification || "")}</span><span class="m">${s.signed_at.slice(0, 10)}</span></div>`).join("") || '<p class="hint">None recorded.</p>'}
     ${can("planner") ? `<form id="sig" class="row-actions"><select name="role"><option value="preparer">Preparer</option><option value="technical_reviewer">Technical reviewer</option><option value="agency_administrator">Agency administrator</option><option value="burn_boss">Burn boss</option></select>
-      <input name="sname" placeholder="Name" required style="flex:1;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><input name="qual" placeholder="Qualification" style="width:110px;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><button class="btn small">Record</button></form>` : ""}`);
+      <input name="sname" placeholder="Name" list="dl-people" required style="flex:1;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><input name="qual" placeholder="Qualification" style="width:110px;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><button class="btn small">Record</button></form>` : ""}`);
   const f = root.querySelector("#sig");
   if (f) f.onsubmit = async (e) => { e.preventDefault(); await call(() => RX.api(`/api/plans/${p.id}/signatures`, { method: "POST", body: { role: f.role.value, name: f.sname.value, qualification: f.qual.value } })); showPlan(p.id); };
 }

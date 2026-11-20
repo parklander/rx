@@ -21,6 +21,7 @@ import export_docx
 import field
 import forecast
 import prep
+import program
 import schema
 
 ROOT = Path(__file__).resolve().parent
@@ -49,6 +50,7 @@ app = FastAPI(title="rx", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.include_router(field.router)
 app.include_router(prep.router)
+app.include_router(program.router)
 
 
 @app.get("/")
@@ -256,7 +258,7 @@ def _touch(c, pid, user):
 
 @app.get("/api/plans")
 def plans_list(user=Depends(auth.current_user)):
-    rows = db.all("""select p.id, p.name, p.unit_name, p.status, p.complexity, p.version_no, p.demo, p.updated_at, p.planned_window,
+    rows = db.all("""select p.id, p.name, p.unit_name, p.status, p.complexity, p.version_no, p.demo, p.updated_at, p.planned_window, p.season_year,
                             (select round((sum(ST_Area(geom::geography))/10000)::numeric, 1) from plans.feature f
                               where f.plan_id = p.id and f.kind = 'burn_unit') as area_ha,
                             (select count(*) from plans.element e where e.plan_id = p.id and e.status = 'complete') as complete,
@@ -268,10 +270,16 @@ def plans_list(user=Depends(auth.current_user)):
 @app.post("/api/plans")
 def plan_new(body: dict = Body(...), user=Depends(auth.require("planner"))):
     with db.tx() as c:
-        r = c.execute("""insert into plans.plan (name, unit_name, complexity, min_burn_boss, planned_window, created_by)
-                         values (%s,%s,%s,%s,%s,%s) returning id""",
+        season = body.get("season_year") or (c.execute("select max(year) y from plans.season").fetchone() or {}).get("y") \
+            or datetime.now().year
+        r = c.execute("""insert into plans.plan (name, unit_name, complexity, min_burn_boss, planned_window, created_by, season_year)
+                         values (%s,%s,%s,%s,%s,%s,%s) returning id""",
                       (body["name"], body.get("unit_name"), body.get("complexity"), body.get("min_burn_boss"),
-                       body.get("planned_window"), user["username"])).fetchone()
+                       body.get("planned_window"), user["username"], season)).fetchone()
+        for code, content in program.plan_defaults().items():  # e.g. the usual burn boss in Element 11
+            c.execute("""insert into plans.element (plan_id, code, content, status, updated_by) values (%s,%s,%s,'draft',%s)
+                         on conflict (plan_id, code) do update set content = plans.element.content || excluded.content""",
+                      (r["id"], code, db.jsonb(content), "role defaults"))
         if body.get("geom"):  # drawn on the program map: the burn block becomes the plan's burn unit
             c.execute("""insert into plans.feature (plan_id, kind, label, geom, updated_by)
                          values (%s, 'burn_unit', %s, ST_SetSRID(ST_GeomFromGeoJSON(%s),4326), %s)""",
@@ -286,7 +294,7 @@ def blocks(user=Depends(auth.current_user)):
     rows = db.all("""
         with latest as (select p.* from plans.plan p where not exists (select 1 from plans.plan n where n.parent_plan_id = p.id)),
         unit as (select plan_id, ST_Union(geom) g from plans.feature where kind = 'burn_unit' group by plan_id)
-        select l.id, l.name, l.unit_name, l.status, l.version_no, l.complexity, l.planned_window, l.demo, l.updated_at,
+        select l.id, l.name, l.unit_name, l.status, l.version_no, l.complexity, l.planned_window, l.demo, l.updated_at, l.season_year,
                round((ST_Area(u.g::geography)/10000)::numeric, 1) as area_ha,
                (select max(coalesce(t.ended_on, t.occurred_on)) from fuels.treatment t
                  where t.kind in ('prescribed_burn','wildfire') and ST_Intersects(t.geom, u.g)) as last_fire,
@@ -331,7 +339,7 @@ def plan_get(pid: int, user=Depends(auth.current_user)):
 @app.patch("/api/plans/{pid}")
 def plan_patch(pid: int, body: dict = Body(...), user=Depends(auth.require("planner"))):
     _editable(pid)
-    allowed = ["name", "unit_name", "complexity", "min_burn_boss", "planned_window", "admin_unit"]
+    allowed = ["name", "unit_name", "complexity", "min_burn_boss", "planned_window", "admin_unit", "season_year"]
     sets = [(k, body[k]) for k in allowed if k in body]
     if sets:
         with db.tx() as c:
@@ -518,8 +526,8 @@ def plan_amend(pid: int, body: dict = Body(...), user=Depends(auth.require("plan
         raise HTTPException(409, "this version already has an amendment")
     with db.tx() as c:
         new = c.execute("""insert into plans.plan (name, unit_name, admin_unit, complexity, min_burn_boss, planned_window,
-                             version_no, parent_plan_id, amendment_note, demo, created_by)
-                           select name, unit_name, admin_unit, complexity, min_burn_boss, planned_window, version_no + 1, id, %s, demo, %s
+                             version_no, parent_plan_id, amendment_note, demo, created_by, season_year)
+                           select name, unit_name, admin_unit, complexity, min_burn_boss, planned_window, version_no + 1, id, %s, demo, %s, season_year
                            from plans.plan where id = %s returning id""", (body.get("note"), user["username"], pid)).fetchone()["id"]
         c.execute("insert into plans.element (plan_id, code, content, status, updated_by) select %s, code, content, status, %s from plans.element where plan_id = %s",
                   (new, user["username"], pid))
