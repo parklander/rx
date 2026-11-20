@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>rx · Plan review</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/m.css">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icon-192.png">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<meta name="theme-color" content="#1d2329">
+</head>
+<body class="mobile">
+<header class="mbar">
+  <b class="logo">rx</b>
+  <label class="sr" for="plan-pick">Plan</label>
+  <select id="plan-pick" aria-label="Plan"></select>
+  <span id="net" class="net" hidden>Offline copy</span>
+</header>
+<div id="mmap"></div>
+<div class="fab">
+  <button type="button" id="locate" aria-label="Show my location">◎</button>
+  <button type="button" id="layers-btn" aria-label="Layers" aria-expanded="false">☰</button>
+</div>
+<div id="layers" class="layer-panel mlayers" hidden></div>
+<section id="sheet" class="sheet" aria-label="Plan details">
+  <button type="button" class="grip" id="grip" aria-label="Expand or collapse the details"><span></span></button>
+  <nav class="mtabs" role="tablist" id="mtabs"></nav>
+  <div class="mpanel" id="mpanel"></div>
+</section>
+<div id="mlogin" class="login-wrap" hidden></div>
+<script src="/static/vendor/leaflet/leaflet.js"></script>
+<script src="/static/common.js"></script>
+<script src="/static/m.js"></script>
+</body>
+</html>

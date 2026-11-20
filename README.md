@@ -1,0 +1,108 @@
+# rx: Prescribed Fire Planning
+
+A web app for writing NWCG-style prescribed fire plans (PMS 484 / 484-1, Dec 2021 template) on top of a
+versioned PostGIS database of the landscape: fuels, fireguards, roads, water, restricted areas,
+infrastructure, critical habitat, sensitive features and smoke receptors. Companion to
+[fwx](https://github.com/parklander/fwx) (fire weather); meant for `rx.rtams.ca`.
+
+- **Desktop editor** (`/`): plan list, map workspace, the 21 elements plus appendices A–F, map features,
+  values and fuels, prescription, ignition variants, burn days, versions and signatures, Word export.
+- **Mobile review** (`/m`): read-only map and plan for the field. GPS position, layers, ignition steps,
+  values, every element. The last plan opened is kept on the device and works offline; map tiles you
+  have viewed are cached.
+
+## Data model
+
+One PostGIS database, one schema per domain:
+
+| Schema | Holds |
+|---|---|
+| `plans` | plans, the 21+6 elements, plan geometry (burn unit, ignition units, contingency area, holding and contingency lines, trigger points, safety zones, escape routes…), prescription, ignition variants, signatures, burn days |
+| `fuels` | `fuel_class` (versioned); `treatment`, `plot`, `test_fire` (records) |
+| `ops` | `fireguard`, `road`, `water_source`, `restricted_area`, `bivouac` (versioned) |
+| `infra` | `asset` with material and vulnerability class (versioned) |
+| `habitat` | `critical_habitat`, `sensitive_feature` (versioned); `observation` (records) |
+| `smoke` | `receptor` (versioned) |
+| `weather` | `forecast_snapshot`: forecasts frozen at decision points |
+| `meta` | users, sessions, layer catalogue, releases, the versioning functions |
+
+### Versioning
+
+**State layers** (what the landscape is like) are never overwritten. Every row carries:
+
+- `feature_id`: the feature's identity across versions;
+- `valid`: when the row is true on the ground;
+- `recorded`: when the database held it as current knowledge;
+- `release_id`, `change_note`, `changed_by`, `source_event`.
+
+`meta.vwrite(table, feature_id, data, valid_from, note, who, release)` writes a new version (or a new
+feature when `feature_id` is null); `meta.vretire(...)` ends one. A trigger blocks plain UPDATE and
+DELETE. Any past state can be rebuilt: *what was true on date G, as we knew it on date K*:
+
+```sql
+select * from ops.fireguard where recorded @> K and valid @> G;
+```
+
+**Event layers** (burns, mowing, plots, test fires, observations) are append-only records.
+
+**Releases** (`meta.release`) name reviewed versions of a layer, e.g. "Fuels 2026.2".
+
+### Plans
+
+- Elements are saved as structured sections; every save is kept (`plans.element_rev`), as is every
+  change to plan geometry (`plans.feature_rev`).
+- Status: draft → review → approved → implemented → closed (or cancelled). Approval needs the
+  `burn_boss` role, **locks the plan** and records `as_of` (the knowledge time) and the published
+  releases in force. The overlay, maps and export of an approved plan always show the data as it was
+  at approval.
+- **Amend** copies an approved plan into a new draft version (`parent_plan_id`, `version_no + 1`).
+- **Ignition variants** are pre-approved firing plans by wind direction.
+- **Burn days** freeze the burn-morning forecast (Open-Meteo `gem_seamless`, as in fwx) at the unit,
+  check every hour 06–21 against the prescription and the variants, require one variant to hold for
+  the whole ignition period, and record the 2B checklist and the burn boss's GO / NO-GO.
+
+### Roles
+
+`viewer` (read; no sensitive layers) · `planner` (edit drafts and layers) · `burn_boss` (approve,
+publish releases, go / no-go) · `admin`.
+
+## Run locally
+
+```bash
+sudo apt install postgresql postgis
+sudo -u postgres psql -c "create role rx login password 'rx' superuser" -c "create database rx owner rx"
+pip install -r requirements.txt
+python migrate.py
+python seed_demo.py                                   # optional: DEMO plan + notional layers + RHWO grid
+python manage.py create-user admin admin "Your Name"  # prompts for a password
+RX_INSECURE_COOKIE=1 uvicorn app:app --port 8100      # cookie without HTTPS, local only
+```
+
+`RX_DATABASE_URL` (default `postgresql://rx:rx@localhost/rx`), `RX_TZ` (default `America/Winnipeg`).
+
+## Deploy (alongside fwx)
+
+1. DNS: an `A` record for `rx.rtams.ca` pointing at the droplet.
+2. On the droplet, as root: `bash deploy/setup.sh <repo-url> rx.rtams.ca`
+   It installs PostgreSQL/PostGIS, creates the database with a random password in `/etc/rx.env`,
+   runs the migrations, adds an `rx` systemd service on port 8100, **appends** a Caddy site block
+   (fwx's stays), and installs a nightly `pg_dump` (14 days in `/var/backups/rx`).
+3. Create a user (the command is printed at the end).
+4. Updates: `bash /opt/rx/deploy/update.sh`.
+
+**Before loading real CFB Shilo data:** the droplet is outside DND networks. Species locations,
+cultural sites, UXO areas and infrastructure need sign-off for that hosting. Sensitive layers are
+already restricted to planner and above, but that is not a substitute for the approval.
+
+## Demo data
+
+`seed_demo.py` loads a **notional** 161 ha burn unit and notional layers (marked DEMO) so the app can
+be tried, plus the real Red-headed Woodpecker critical habitat grid (176 × 10 km squares, Manitoba).
+
+## Next
+
+- Map products: the six PMS 484-1 map templates generated from a plan (vicinity, project, fuels,
+  values, smoke, fire behaviour), one project and smoke map per ignition variant.
+- Fireline runs attached to Element 7 / Appendix E; hourly FFMC/ISI on burn days (from fwx's `wxpoint`).
+- Layer editing in the UI (today: API) and import tools (shapefile / GeoPackage → a release).
+- Post-burn: write the burn perimeter to `fuels.treatment` and a new fuels version.

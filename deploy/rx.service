@@ -1,0 +1,16 @@
+[Unit]
+Description=rx prescribed fire planning
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+User=rx
+Group=rx
+WorkingDirectory=/opt/rx
+EnvironmentFile=/etc/rx.env
+ExecStart=/opt/rx/.venv/bin/uvicorn app:app --host 127.0.0.1 --port 8100 --proxy-headers
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,407 @@
+// rx desktop editor.
+const S = { user: null, defs: [], layers: [], plan: null, featuresFC: null, overlay: null, map: null,
+            planLayer: null, landscape: {}, asOf: "", tab: "elements", el: "4", drawKind: null };
+const view = document.getElementById("view");
+const ROLE_RANK = { viewer: 0, planner: 1, burn_boss: 2, admin: 3 };
+const can = (role) => S.user && ROLE_RANK[S.user.role] >= ROLE_RANK[role];
+const locked = () => S.plan && ["approved", "implemented", "closed", "cancelled"].includes(S.plan.status);
+const esc = RX.esc;
+
+function toast(msg, bad) {
+  let t = document.getElementById("toast");
+  if (!t) { t = document.createElement("div"); t.id = "toast"; document.body.appendChild(t);
+    Object.assign(t.style, { position: "fixed", bottom: "18px", left: "50%", transform: "translateX(-50%)", padding: "9px 14px", borderRadius: "6px", color: "#fff", zIndex: 9999, fontSize: "14px", maxWidth: "90vw" }); }
+  t.textContent = msg; t.style.background = bad ? "#b3261e" : "#1d2329"; t.hidden = false;
+  clearTimeout(t._h); t._h = setTimeout(() => (t.hidden = true), 3500);
+}
+async function call(fn) { try { return await fn(); } catch (e) { if (e.status === 401) return showLogin(); toast(e.message, true); throw e; } }
+
+// --- routing -----------------------------------------------------------------------
+async function route() {
+  const m = location.hash.match(/^#plan\/(\d+)(?:\/(\w+))?/);
+  if (!S.user) {
+    try { S.user = await RX.api("/api/me"); } catch (e) { return showLogin(); }
+    document.getElementById("who").textContent = `${S.user.display_name} · ${S.user.role.replace("_", " ")}`;
+    document.getElementById("logout").hidden = false;
+    [S.defs, S.layers] = await Promise.all([RX.api("/api/element-defs"), RX.api("/api/layers")]);
+  }
+  if (m) return showPlan(+m[1], m[2]);
+  return showList();
+}
+window.addEventListener("hashchange", route);
+document.getElementById("logout").onclick = async () => { await RX.api("/api/logout", { method: "POST" }); location.hash = ""; location.reload(); };
+
+// --- login ---------------------------------------------------------------------------
+function showLogin() {
+  S.user = null;
+  view.innerHTML = `<div class="login-wrap"><form class="login" id="lf">
+    <h2>Sign in</h2><p>Prescribed fire plans and the landscape database.</p>
+    <div class="field"><label for="u">Username</label><input id="u" autocomplete="username" required></div>
+    <div class="field"><label for="p">Password</label><input id="p" type="password" autocomplete="current-password" required></div>
+    <div class="err" id="le" role="alert"></div>
+    <button class="btn primary" style="width:100%">Sign in</button></form></div>`;
+  document.getElementById("lf").onsubmit = async (e) => {
+    e.preventDefault();
+    try { await RX.api("/api/login", { method: "POST", body: { username: u.value, password: p.value } }); route(); }
+    catch (err) { document.getElementById("le").textContent = err.message; }
+  };
+  document.getElementById("u").focus();
+}
+
+// --- plan list ------------------------------------------------------------------------
+async function showList() {
+  const plans = await call(() => RX.api("/api/plans"));
+  view.innerHTML = `<div class="page">
+    <div class="page-head"><h2>Prescribed fire plans</h2>${can("planner") ? '<button class="btn primary" id="np">New plan</button>' : ""}</div>
+    <table class="list"><thead><tr><th>Plan</th><th>Status</th><th class="num">Area</th><th>Elements complete</th><th>Window</th><th>Updated</th></tr></thead>
+    <tbody>${plans.map((p) => `<tr class="row" data-id="${p.id}" tabindex="0">
+      <td><b>${esc(p.name)}</b> ${p.demo ? '<span class="badge demo">DEMO</span>' : ""}<div class="hint">${esc(p.unit_name || "")} · v${p.version_no}</div></td>
+      <td><span class="badge ${p.status}">${p.status}</span></td>
+      <td class="num">${p.area_ha ?? "—"} ha</td>
+      <td><span class="bar"><i style="width:${Math.round(100 * p.complete / p.total)}%"></i></span> <span class="hint">${p.complete} / ${p.total}</span></td>
+      <td class="hint">${esc(p.planned_window || "")}</td><td class="hint">${p.updated_at.slice(0, 10)}</td></tr>`).join("")
+      || '<tr><td colspan="6" class="hint">No plans yet.</td></tr>'}</tbody></table></div>`;
+  view.querySelectorAll("tr.row").forEach((tr) => {
+    tr.onclick = () => (location.hash = `#plan/${tr.dataset.id}`);
+    tr.onkeydown = (e) => e.key === "Enter" && tr.onclick();
+  });
+  const np = document.getElementById("np");
+  if (np) np.onclick = async () => {
+    const name = prompt("Prescribed fire name (e.g. Burn Unit 12, spring 2027)");
+    if (!name) return;
+    const r = await call(() => RX.api("/api/plans", { method: "POST", body: { name } }));
+    location.hash = `#plan/${r.id}`;
+  };
+}
+
+// --- workspace -----------------------------------------------------------------------
+async function showPlan(id, tab) {
+  if (tab) S.tab = tab;
+  const [plan, fc, ov] = await call(() => Promise.all([RX.api(`/api/plans/${id}`), RX.api(`/api/plans/${id}/features`), RX.api(`/api/plans/${id}/overlay`)]));
+  S.plan = plan; S.featuresFC = fc; S.overlay = ov;
+  const freshMap = !S.map || !document.getElementById("map");
+  if (freshMap) {
+    view.innerHTML = `<div class="ws-bar" id="bar"></div><div class="ws"><div id="map"></div><div class="side">
+      <div class="tabs" role="tablist" id="tabs"></div><div class="tabpanel" id="panel"></div></div></div>`;
+    buildMap();
+  }
+  renderBar(); drawPlanFeatures(); renderTabs(); renderPanel();
+  if (freshMap) fitPlan();
+}
+
+function renderBar() {
+  const p = S.plan;
+  const btn = (id, label, cls = "") => `<button class="btn small ${cls}" id="${id}">${label}</button>`;
+  let actions = "";
+  if (p.status === "draft" && can("planner")) actions += btn("to-review", "Submit for review");
+  if (p.status === "review" && can("planner")) actions += btn("to-draft", "Back to draft");
+  if (p.status === "review" && can("burn_boss")) actions += btn("approve", "Approve", "primary");
+  if (["approved", "implemented", "closed"].includes(p.status) && can("planner") && !p.successor) actions += btn("amend", "Amend");
+  if (p.successor) actions += `<a class="btn small" href="#plan/${p.successor.id}">Go to the amendment ›</a>`;
+  document.getElementById("bar").innerHTML = `<a class="btn small" href="#">‹ Plans</a>
+    <h2>${esc(p.name)}</h2> ${p.demo ? '<span class="badge demo">DEMO</span>' : ""}<span class="badge ${p.status}">${p.status}</span>
+    <span class="meta">v${p.version_no} · ${esc(p.complexity || "complexity —")} · ${esc(p.min_burn_boss || "")}${p.as_of ? " · data frozen " + p.as_of.slice(0, 16).replace("T", " ") : ""}</span>
+    <span class="spacer"></span>${actions}
+    <a class="btn small" href="/api/plans/${p.id}/export.docx">Export .docx</a>
+    <a class="btn small" href="/m#${p.id}" target="_blank" rel="noopener">Mobile ↗</a>`;
+  const on = (id, fn) => { const b = document.getElementById(id); if (b) b.onclick = fn; };
+  const status = (s) => async () => { await call(() => RX.api(`/api/plans/${p.id}/status`, { method: "POST", body: { status: s } })); showPlan(p.id); };
+  on("to-review", status("review")); on("to-draft", status("draft"));
+  on("approve", async () => { if (confirm("Approve this plan? It will be locked and the data it uses frozen as of now.")) status("approved")(); });
+  on("amend", async () => {
+    const note = prompt("What does the amendment change?"); if (!note) return;
+    const r = await call(() => RX.api(`/api/plans/${p.id}/amend`, { method: "POST", body: { note } })); location.hash = `#plan/${r.id}`;
+  });
+}
+
+// --- map ---------------------------------------------------------------------------------
+function buildMap() {
+  S.map = L.map("map", { zoomControl: true });
+  const bm = RX.basemaps(); bm["Imagery"].addTo(S.map);
+  S.landscape = {};
+  const panel = L.control({ position: "topright" });
+  panel.onAdd = () => {
+    const wrap = L.DomUtil.create("div");
+    const tb = L.DomUtil.create("button", "layer-toggle", wrap); tb.type = "button"; tb.textContent = "Layers ▾"; tb.setAttribute("aria-expanded", "false");
+    const d = L.DomUtil.create("div", "layer-panel", wrap); d.hidden = true;
+    tb.onclick = () => { d.hidden = !d.hidden; tb.setAttribute("aria-expanded", String(!d.hidden)); tb.textContent = d.hidden ? "Layers ▾" : "Layers ▴"; };
+    L.DomEvent.disableClickPropagation(wrap); L.DomEvent.disableScrollPropagation(wrap);
+    d.innerHTML = `<div class="sec">Basemap</div>${Object.keys(bm).map((k, i) => `<label><input type="radio" name="bm" value="${k}" ${i === 0 ? "checked" : ""}> ${k}</label>`).join("")}
+      <div class="sec">Landscape layers</div>
+      ${S.layers.filter((l) => l.visible).map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${l.kind === "event" ? ' <span class="hint">(records)</span>' : ""}</label>`).join("")}
+      <div class="sec">Show layers as on</div><input type="date" id="asof" aria-label="Show landscape layers as they were on this date">
+      <div class="hint" style="margin-top:4px">Blank = current.</div>`;
+    d.querySelectorAll('input[name="bm"]').forEach((r) => (r.onchange = () => { Object.values(bm).forEach((b) => S.map.removeLayer(b)); bm[r.value].addTo(S.map).bringToBack(); }));
+    d.querySelectorAll("input[data-layer]").forEach((c) => (c.onchange = () => toggleLandscape(c.dataset.layer, c.checked)));
+    d.querySelector("#asof").onchange = (e) => { S.asOf = e.target.value; Object.keys(S.landscape).forEach((n) => toggleLandscape(n, true)); };
+    return wrap;
+  };
+  panel.addTo(S.map);
+  S.map.pm.setGlobalOptions({ snappable: true, snapDistance: 15 });
+  S.map.on("pm:create", onDrawn);
+}
+
+async function toggleLandscape(name, on) {
+  if (S.landscape[name]) { S.map.removeLayer(S.landscape[name]); delete S.landscape[name]; }
+  if (!on) return;
+  const meta = S.layers.find((l) => l.name === name);
+  const q = S.asOf ? `?on_ground=${S.asOf}T12:00:00Z` : "";
+  const fc = await call(() => RX.api(`/api/layers/${name}${q}`));
+  S.landscape[name] = RX.landscapeLayer(meta, fc).addTo(S.map);
+  if (S.planLayer) S.planLayer.bringToFront();
+}
+
+function drawPlanFeatures() {
+  if (S.planLayer) S.map.removeLayer(S.planLayer);
+  S.planLayer = RX.featureLayer(S.featuresFC, (f, l) => { l.featureId = f.id; }).addTo(S.map);
+}
+function fitPlan() {
+  const b = S.planLayer.getBounds();
+  if (b.isValid()) S.map.fitBounds(b, { padding: [20, 20] }); else S.map.setView([49.75, -99.5], 11);
+}
+
+async function onDrawn(e) {
+  const kind = S.drawKind; S.drawKind = null;
+  const gj = e.layer.toGeoJSON().geometry; S.map.removeLayer(e.layer);
+  if (!kind) return;
+  const label = prompt(`Label for this ${RX.KINDS[kind].label.toLowerCase()}`, "") ?? "";
+  await call(() => RX.api(`/api/plans/${S.plan.id}/features`, { method: "POST", body: { kind, label, geom: gj } }));
+  toast("Saved"); showPlan(S.plan.id);
+}
+
+// --- tabs --------------------------------------------------------------------------------
+const TABS = [["elements", "Elements"], ["features", "Map features"], ["values", "Values & fuels"], ["rx", "Prescription"],
+              ["variants", "Ignition variants"], ["burn", "Burn days"], ["versions", "Versions"]];
+function renderTabs() {
+  const t = document.getElementById("tabs");
+  t.innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" data-tab="${k}">${l}</button>`).join("");
+  t.querySelectorAll("button").forEach((b) => (b.onclick = () => { S.tab = b.dataset.tab; renderTabs(); renderPanel(); }));
+}
+function renderPanel() {
+  const el = document.getElementById("panel");
+  const lockNote = locked() ? `<div class="locked">This plan is ${S.plan.status}. It is locked: use <b>Amend</b> to make a new version.</div>` : "";
+  const fn = { elements: panelElements, features: panelFeatures, values: panelValues, rx: panelRx, variants: panelVariants, burn: panelBurn, versions: panelVersions }[S.tab];
+  el.innerHTML = lockNote; fn(el);
+}
+
+// Elements
+function panelElements(root) {
+  const els = S.plan.elements;
+  const d = S.defs.find((x) => x.code === S.el) || S.defs[0];
+  const e = els[d.code] || { content: {}, status: "empty" };
+  const ro = locked() || !can("planner");
+  root.insertAdjacentHTML("beforeend", `<div class="el-list" role="list">${S.defs.map((x) => {
+    const st = (els[x.code] || {}).status || "empty";
+    return `<button class="el-chip" data-code="${x.code}" aria-current="${x.code === d.code}" title="${esc(x.title)} (${st})">${x.code}<span class="dot ${st}"></span></button>`; }).join("")}</div>
+    <div class="el-legend"><span><span class="dot"></span>empty</span><span><span class="dot draft"></span>draft</span><span><span class="dot complete"></span>complete</span>
+      <span style="flex:1"></span><span>${Object.values(els).filter((e) => e.status === "complete").length} of ${S.defs.length} complete</span></div>
+    <div class="el-edit"><h3>${d.code}. ${esc(d.title)}</h3><div class="owner" style="margin-bottom:4px">Drafted by: ${d.owner_role.replace("_", " ")}</div><p class="hint">${esc(d.guidance || "")}</p>
+    ${d.sections.map((s) => `<div class="field"><label for="s-${s.key}">${esc(s.label)}</label>
+      <textarea id="s-${s.key}" data-key="${s.key}" ${ro ? "readonly" : ""}>${esc(e.content[s.key] || "")}</textarea></div>`).join("")}
+    <div class="row-actions">${ro ? "" : `<label class="hint">Status <select id="est"><option value="draft">Draft</option><option value="complete">Complete</option></select></label>
+      <button class="btn primary" id="esave">Save element</button>`}
+      <button class="btn small" id="ehist">History</button><span class="hint">${e.updated_at ? "Last saved " + e.updated_at.slice(0, 16).replace("T", " ") + " by " + esc(e.updated_by) : ""}</span></div>
+    <div id="hist"></div></div>`);
+  root.querySelectorAll(".el-chip").forEach((b) => (b.onclick = () => { S.el = b.dataset.code; renderPanel(); }));
+  const st = document.getElementById("est"); if (st) st.value = e.status === "complete" ? "complete" : "draft";
+  const sv = document.getElementById("esave");
+  if (sv) sv.onclick = async () => {
+    const content = {}; root.querySelectorAll("textarea[data-key]").forEach((t) => (content[t.dataset.key] = t.value));
+    await call(() => RX.api(`/api/plans/${S.plan.id}/elements/${d.code}`, { method: "PUT", body: { content, status: st.value } }));
+    S.plan.elements[d.code] = { content, status: st.value, updated_at: new Date().toISOString(), updated_by: S.user.username };
+    toast(`Element ${d.code} saved`); renderPanel();
+  };
+  document.getElementById("ehist").onclick = async () => {
+    const h = await call(() => RX.api(`/api/plans/${S.plan.id}/elements/${d.code}/history`));
+    document.getElementById("hist").innerHTML = `<h4>Saved versions</h4>` + (h.map((r) => `<details><summary class="hint">${r.saved_at.slice(0, 16).replace("T", " ")} · ${esc(r.saved_by)} · ${r.status}</summary>
+      ${Object.entries(r.content).map(([k, v]) => `<p class="hint"><b>${esc(k)}</b>: ${esc(v)}</p>`).join("")}</details>`).join("") || '<p class="hint">No saves yet.</p>');
+  };
+}
+
+// Map features
+function panelFeatures(root) {
+  const ro = locked() || !can("planner");
+  const feats = S.featuresFC.features;
+  root.insertAdjacentHTML("beforeend", `${ro ? "" : `<div class="row-actions"><select id="nk" aria-label="Feature type">${Object.entries(RX.KINDS).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join("")}</select>
+      <button class="btn primary" id="draw">Draw on map</button></div><p class="hint">Pick a type, then click on the map to draw it. Lines and polygons finish on the first or last point.</p>`}
+    ${Object.keys(RX.KINDS).map((k) => {
+      const fs = feats.filter((f) => f.properties.kind === k); if (!fs.length) return "";
+      return `<h4>${RX.KINDS[k].label}</h4>` + fs.map((f) => `<div class="feat" data-id="${f.id}"><span class="sw" style="background:${RX.KINDS[k].color}"></span>
+        <span class="lbl">${esc(f.properties.label || "—")}</span><span class="m">${f.properties.area_ha ? f.properties.area_ha + " ha" : f.properties.length_m ? Math.round(f.properties.length_m) + " m" : ""}</span>
+        <button class="btn small" data-act="zoom">Zoom</button>${ro ? "" : `<button class="btn small" data-act="edit">Edit shape</button><button class="btn small danger" data-act="del" aria-label="Delete">✕</button>`}</div>`).join("");
+    }).join("")}`);
+  const draw = document.getElementById("draw");
+  if (draw) draw.onclick = () => {
+    S.drawKind = document.getElementById("nk").value;
+    const shape = RX.KINDS[S.drawKind].draw;
+    S.map.pm.enableDraw(shape, { continueDrawing: false });
+    toast(`Drawing a ${RX.KINDS[S.drawKind].label.toLowerCase()}. Esc cancels.`);
+  };
+  root.querySelectorAll(".feat button").forEach((b) => (b.onclick = async () => {
+    const id = b.closest(".feat").dataset.id;
+    const layer = S.planLayer.getLayers().find((l) => l.featureId === id);
+    if (b.dataset.act === "zoom") { layer.getBounds ? S.map.fitBounds(layer.getBounds(), { maxZoom: 16 }) : S.map.setView(layer.getLatLng(), 16); layer.openTooltip(); }
+    if (b.dataset.act === "del" && confirm("Delete this feature?")) {
+      await call(() => RX.api(`/api/plans/${S.plan.id}/features/${id}`, { method: "DELETE" })); showPlan(S.plan.id);
+    }
+    if (b.dataset.act === "edit") {
+      if (layer.pm.enabled()) {
+        layer.pm.disable();
+        await call(() => RX.api(`/api/plans/${S.plan.id}/features/${id}`, { method: "PUT", body: { geom: layer.toGeoJSON().geometry } }));
+        toast("Shape saved"); showPlan(S.plan.id);
+      } else { layer.pm.enable({ snappable: true }); b.textContent = "Save shape"; b.classList.add("primary"); }
+    }
+  }));
+}
+
+// Values & fuels (overlay)
+function panelValues(root) {
+  const ov = S.overlay;
+  const by = {};
+  ov.features.forEach((f) => { const k = f.properties.layer; (by[k] = by[k] || []).push(f); });
+  const title = (n) => (S.layers.find((l) => l.name === n) || {}).title || n;
+  root.insertAdjacentHTML("beforeend", `<p class="hint">What the database holds inside the burn unit and the contingency area
+    ${ov.as_of ? `as known when the plan was approved (${ov.as_of.slice(0, 16).replace("T", " ")})` : "right now (draft plans follow the live layers)"}.</p>
+    <h4>Fuel classes</h4><table class="grid"><thead><tr><th>Class</th><th class="num">Burn unit ha</th><th class="num">Contingency ha</th></tr></thead>
+    <tbody>${ov.fuels.map((f) => `<tr><td>${esc(f.fuel_class)}</td><td class="num">${f.unit_ha ?? 0}</td><td class="num">${f.contingency_ha ?? 0}</td></tr>`).join("") || '<tr><td colspan="3" class="hint">No fuel data under the unit.</td></tr>'}</tbody></table>
+    ${Object.entries(by).filter(([k]) => k !== "fuels.fuel_class").map(([k, fs]) => `<h4>${esc(title(k))}</h4>` + fs.map((f, i) => {
+      const p = f.properties; const name = p.name || p.species || p.grid_id || p.kind || "—";
+      const extra = p.vulnerability || p.sensitivity || p.condition || p.status || p.guard_type || "";
+      return `<div class="feat"><span class="lbl">${esc(name)}${p.grid_id && p.species ? " · " + esc(p.grid_id) : ""}</span><span class="m">${esc(extra)}</span>
+        <span class="badge ${p.zone === "unit" ? "review" : "draft"}">${p.zone}</span><button class="btn small" data-k="${k}" data-i="${i}">Show</button></div>`;
+    }).join("")).join("")}`);
+  root.querySelectorAll("button[data-k]").forEach((b) => (b.onclick = () => {
+    const f = by[b.dataset.k][+b.dataset.i];
+    const l = L.geoJSON(f, { style: { color: "#00e5ff", weight: 4, fillOpacity: 0.1 }, pointToLayer: (_, ll) => L.circleMarker(ll, { radius: 10, color: "#00e5ff", weight: 4 }) }).addTo(S.map);
+    S.map.fitBounds(l.getBounds(), { maxZoom: 15 }); setTimeout(() => S.map.removeLayer(l), 4000);
+  }));
+}
+
+// Prescription
+function panelRx(root) {
+  const ro = locked() || !can("planner");
+  const rows = S.plan.prescription.length ? S.plan.prescription : [];
+  root.insertAdjacentHTML("beforeend", `<p class="hint">Limits checked against burn-day forecasts. Leave a side blank for a one-sided limit.</p>
+    <table class="grid" id="rxt"><thead><tr><th>Parameter</th><th>Low</th><th>High</th><th>Note</th>${ro ? "" : "<th></th>"}</tr></thead><tbody>
+    ${rows.map((r) => rxRow(r, ro)).join("")}</tbody></table>
+    ${ro ? "" : `<div class="row-actions"><button class="btn small" id="rxadd">Add parameter</button><button class="btn primary" id="rxsave">Save prescription</button></div>`}`);
+  if (ro) return;
+  document.getElementById("rxadd").onclick = () => document.querySelector("#rxt tbody").insertAdjacentHTML("beforeend", rxRow({}, false));
+  root.addEventListener("click", (e) => { if (e.target.dataset.del) e.target.closest("tr").remove(); });
+  document.getElementById("rxsave").onclick = async () => {
+    const body = [...document.querySelectorAll("#rxt tbody tr")].map((tr) => {
+      const v = (n) => tr.querySelector(`[name=${n}]`).value; const num = (n) => (v(n) === "" ? null : +v(n));
+      return { param: v("param"), low: num("low"), high: num("high"), note: v("note") };
+    });
+    await call(() => RX.api(`/api/plans/${S.plan.id}/prescription`, { method: "PUT", body })); toast("Prescription saved"); showPlan(S.plan.id);
+  };
+}
+function rxRow(r, ro) {
+  const dis = ro ? "disabled" : "";
+  return `<tr><td><select name="param" ${dis}>${Object.entries(RX.PARAMS).map(([k, l]) => `<option value="${k}" ${r.param === k ? "selected" : ""}>${l}</option>`).join("")}</select></td>
+    <td><input name="low" type="number" step="any" value="${r.low ?? ""}" ${dis}></td><td><input name="high" type="number" step="any" value="${r.high ?? ""}" ${dis}></td>
+    <td><input name="note" value="${esc(r.note || "")}" ${dis}></td>${ro ? "" : '<td><button class="btn small danger" data-del="1" aria-label="Remove">✕</button></td>'}</tr>`;
+}
+
+// Ignition variants
+function panelVariants(root) {
+  const ro = locked() || !can("planner");
+  root.insertAdjacentHTML("beforeend", `<p class="hint">Pre-approved ignition plans by wind direction (the direction the wind comes from).
+    On a burn day the forecast picks the variant; a wind outside every variant is a NO-GO until the plan is amended.</p>
+    ${S.plan.variants.map((v) => variantForm(v, ro)).join("")}${ro ? "" : variantForm({ name: "", wind_dir_min: "", wind_dir_max: "", description: "", firing_sequence: [] }, false, true)}`);
+  root.querySelectorAll("form.variant").forEach((f) => (f.onsubmit = async (e) => {
+    e.preventDefault();
+    const body = { name: f.vname.value, wind_dir_min: +f.dmin.value, wind_dir_max: +f.dmax.value, description: f.desc.value,
+      firing_sequence: f.steps.value.split("\n").map((s) => s.trim()).filter(Boolean).map((step) => ({ step })) };
+    const id = f.dataset.id;
+    await call(() => RX.api(id ? `/api/plans/${S.plan.id}/variants/${id}` : `/api/plans/${S.plan.id}/variants`, { method: id ? "PUT" : "POST", body }));
+    toast("Variant saved"); showPlan(S.plan.id);
+  }));
+  root.querySelectorAll("button[data-vdel]").forEach((b) => (b.onclick = async () => {
+    if (!confirm("Delete this variant?")) return;
+    await call(() => RX.api(`/api/plans/${S.plan.id}/variants/${b.dataset.vdel}`, { method: "DELETE" })); showPlan(S.plan.id);
+  }));
+}
+function variantForm(v, ro, isNew) {
+  const dis = ro ? "disabled" : "";
+  return `<form class="variant" data-id="${v.id || ""}" style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin-bottom:12px">
+    <h4 style="margin-top:0">${isNew ? "Add a variant" : esc(v.name)}</h4>
+    <div class="field"><label>Name</label><input name="vname" value="${esc(v.name)}" required ${dis}></div>
+    <div style="display:flex;gap:10px"><div class="field" style="flex:1"><label>Wind from (°)</label><input name="dmin" type="number" min="0" max="360" value="${v.wind_dir_min}" required ${dis}></div>
+    <div class="field" style="flex:1"><label>to (°)</label><input name="dmax" type="number" min="0" max="360" value="${v.wind_dir_max}" required ${dis}></div></div>
+    <div class="field"><label>Description</label><input name="desc" value="${esc(v.description || "")}" ${dis}></div>
+    <div class="field"><label>Firing sequence (one step per line)</label><textarea name="steps" ${dis}>${esc((v.firing_sequence || []).map((s) => s.step).join("\n"))}</textarea></div>
+    ${ro ? "" : `<div class="row-actions"><button class="btn primary">${isNew ? "Add variant" : "Save"}</button>${isNew ? "" : `<button type="button" class="btn small danger" data-vdel="${v.id}">Delete</button>`}</div>`}</form>`;
+}
+
+// Burn days
+const CHECKLIST = [["permits", "Permits and notifications complete"], ["prep", "Pre-burn preparation (lines, wet lines, mowing) complete"],
+  ["weather", "Spot / burn-morning forecast obtained and within prescription"], ["prescription", "On-site weather within prescription"],
+  ["smoke", "Smoke specifications can be met"], ["personnel", "Required personnel and equipment on site"],
+  ["contingency", "Contingency resources available and staged"], ["briefing", "Briefing completed"], ["range", "Range Control clearance received"]];
+function panelBurn(root) {
+  const p = S.plan;
+  const canAdd = ["approved", "implemented"].includes(p.status) && can("planner");
+  root.insertAdjacentHTML("beforeend", `<p class="hint">Burn days are added to approved plans. Each one freezes the forecast it was decided on and records the go / no-go.</p>
+    ${canAdd ? `<div class="row-actions"><input type="date" id="bdd" aria-label="Burn date"><button class="btn primary" id="bdadd">Add burn day</button></div>` : ""}
+    <div id="bdl">${p.burn_days.map((b) => `<div class="feat"><span class="lbl"><b>${b.burn_date}</b></span><span class="badge ${b.decision === "go" ? "approved" : b.decision === "no_go" ? "cancelled" : "draft"}">${b.decision.replace("_", "-")}</span>
+      <button class="btn small" data-bd="${b.id}">Open</button></div>`).join("") || '<p class="hint">None yet.</p>'}</div><div id="bdv"></div>`);
+  const add = document.getElementById("bdadd");
+  if (add) add.onclick = async () => {
+    const d = document.getElementById("bdd").value; if (!d) return toast("Pick a date", true);
+    await call(() => RX.api(`/api/plans/${p.id}/burn-days`, { method: "POST", body: { burn_date: d } })); showPlan(p.id);
+  };
+  root.querySelectorAll("button[data-bd]").forEach((b) => (b.onclick = () => openBurnDay(+b.dataset.bd)));
+}
+async function openBurnDay(id) {
+  const bd = await call(() => RX.api(`/api/burn-days/${id}`));
+  const fc = bd.forecast;
+  const cls = !fc ? "" : fc.verdict.startsWith("GO") ? "go" : fc.verdict.startsWith("PARTIAL") ? "part" : "no";
+  const v = S.plan.variants;
+  document.getElementById("bdv").innerHTML = `<h4>Burn day ${bd.burn_date}</h4>
+    <div class="row-actions">${can("planner") ? '<button class="btn" id="fx">Get burn-day forecast</button>' : ""}<span class="hint">${fc ? `${esc(fc.source)} · ${esc(fc.stage)} · issued ${fc.issued_at.slice(0, 16).replace("T", " ")}` : "No forecast frozen yet."}</span></div>
+    ${fc ? `<div class="verdict ${cls}" style="margin-top:8px">${esc(fc.verdict)}</div>
+      <div class="hours" aria-label="Hourly check 06:00 to 21:00">${fc.hours.map((h) => `<div class="${h.ok_for_variant ? "go" : "no"} ${h.ignition_period ? "ign" : ""}" title="${h.hour}:00 · ${h.temp_c}°C ${h.rh_pct}% ${h.wind_kmh} km/h from ${h.wind_dir_deg}°${h.fails.length ? " · " + h.fails.join("; ") : ""}">${h.hour}</div>`).join("")}</div>
+      <p class="hint">Outlined hours are the ignition period. GO windows: ${fc.go_windows.join(", ") || "none"}. Suggested variant: <b>${esc(fc.suggested_variant || "none")}</b>.
+      ${fc.unchecked_params.length ? `Not in the forecast, check separately: ${fc.unchecked_params.map((k) => RX.PARAMS[k] || k).join(", ")}.` : ""}</p>` : ""}
+    <h4>Go / no-go checklist (Element 2B)</h4>
+    ${CHECKLIST.map(([k, l]) => `<label style="display:flex;gap:8px;padding:3px 0;font-size:14px"><input type="checkbox" data-ck="${k}" ${bd.checklist?.[k]?.ok ? "checked" : ""}> ${l}</label>`).join("")}
+    <div class="field" style="margin-top:8px"><label for="bdvar">Ignition variant</label><select id="bdvar"><option value="">—</option>${v.map((x) => `<option value="${x.id}" ${bd.variant_id === x.id ? "selected" : ""}>${esc(x.name)} (${x.wind_dir_min}–${x.wind_dir_max}°)</option>`).join("")}</select></div>
+    <div class="field"><label for="bdtf">Test fire result</label><input id="bdtf" value="${esc(bd.test_fire_result || "")}"></div>
+    <div class="field"><label for="bdn">Notes</label><textarea id="bdn">${esc(bd.notes || "")}</textarea></div>
+    <div class="row-actions"><button class="btn" id="bdsave">Save</button>
+      ${can("burn_boss") ? '<button class="btn primary" id="bdgo">Decision: GO</button><button class="btn danger" id="bdno">Decision: NO-GO</button>' : ""}
+      <span class="hint">${bd.decided_at ? `Decided ${bd.decision} by ${esc(bd.decided_by)} at ${bd.decided_at.slice(0, 16).replace("T", " ")}` : ""}</span></div>`;
+  const body = (decision) => {
+    const checklist = {}; document.querySelectorAll("[data-ck]").forEach((c) => (checklist[c.dataset.ck] = { ok: c.checked }));
+    const vv = document.getElementById("bdvar").value;
+    return { checklist, variant_id: vv ? +vv : null, test_fire_result: document.getElementById("bdtf").value, notes: document.getElementById("bdn").value, ...(decision ? { decision } : {}) };
+  };
+  const save = (decision) => async () => {
+    if (decision === "go" && !confirm("Record a GO decision for this burn day?")) return;
+    await call(() => RX.api(`/api/burn-days/${id}`, { method: "PUT", body: body(decision) })); toast("Burn day saved");
+    if (decision) { await showPlan(S.plan.id); S.tab = "burn"; renderTabs(); renderPanel(); } openBurnDay(id);
+  };
+  document.getElementById("bdsave").onclick = save();
+  const g = document.getElementById("bdgo"); if (g) g.onclick = save("go");
+  const n = document.getElementById("bdno"); if (n) n.onclick = save("no_go");
+  const fx = document.getElementById("fx");
+  if (fx) fx.onclick = async () => { fx.disabled = true; fx.textContent = "Fetching…"; await call(() => RX.api(`/api/burn-days/${id}/forecast`, { method: "POST", body: {} })).finally(() => (fx.disabled = false)); openBurnDay(id); };
+}
+
+// Versions
+function panelVersions(root) {
+  const p = S.plan;
+  root.insertAdjacentHTML("beforeend", `<p class="hint">Approved plans are locked. An amendment copies the plan into a new draft version; the approved version keeps the data it was approved on.</p>
+    <table class="grid"><thead><tr><th>Version</th><th>Status</th><th>Amendment</th><th></th></tr></thead><tbody>
+    ${p.versions.map((v) => `<tr><td>v${v.version_no}</td><td><span class="badge ${v.status}">${v.status}</span></td><td>${esc(v.amendment_note || "")}</td>
+      <td>${v.id === p.id ? "<b>this</b>" : `<a href="#plan/${v.id}">open</a>`}</td></tr>`).join("")}
+    ${p.successor ? `<tr><td colspan="3">A newer version exists.</td><td><a href="#plan/${p.successor.id}">open</a></td></tr>` : ""}</tbody></table>
+    <h4>Signatures (Element 1)</h4>${p.signatures.map((s) => `<div class="feat"><span class="lbl">${esc(s.role.replace(/_/g, " "))}: <b>${esc(s.name)}</b> ${esc(s.qualification || "")}</span><span class="m">${s.signed_at.slice(0, 10)}</span></div>`).join("") || '<p class="hint">None recorded.</p>'}
+    ${can("planner") ? `<form id="sig" class="row-actions"><select name="role"><option value="preparer">Preparer</option><option value="technical_reviewer">Technical reviewer</option><option value="agency_administrator">Agency administrator</option><option value="burn_boss">Burn boss</option></select>
+      <input name="sname" placeholder="Name" required style="flex:1;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><input name="qual" placeholder="Qualification" style="width:110px;border:1px solid #b9b4a8;border-radius:6px;padding:6px"><button class="btn small">Record</button></form>` : ""}`);
+  const f = document.getElementById("sig");
+  if (f) f.onsubmit = async (e) => { e.preventDefault(); await call(() => RX.api(`/api/plans/${p.id}/signatures`, { method: "POST", body: { role: f.role.value, name: f.sname.value, qualification: f.qual.value } })); showPlan(p.id); };
+}
+
+route();
