@@ -64,7 +64,7 @@ def visits(plan_id: Optional[int] = None, user=Depends(auth.current_user)):
     rows = db.all("""select v.*, (select count(*) from field.record r where r.visit_id = v.id) as n_records,
                             (select count(*) from field.media m join field.record r on r.id = m.record_id where r.visit_id = v.id) as n_photos,
                             (select count(*) from field.record r where r.visit_id = v.id and r.status = 'issue') as n_issues
-                     from field.visit v where (%s::int is null or v.plan_id = %s) order by v.started_at desc limit 200""", (plan_id, plan_id))
+                     from field.visit v where (%s::int is null or v.plan_id in (select plans.lineage(%s))) order by v.started_at desc limit 200""", (plan_id, plan_id))
     return [db._plain(r) for r in rows]
 
 
@@ -91,7 +91,7 @@ def visit_get(vid: str, user=Depends(auth.current_user)):
 
 @router.get("/api/plans/{pid}/visit-records")
 def plan_visit_records(pid: int, user=Depends(auth.current_user)):
-    return _records("v.plan_id = %s", (pid,))
+    return _records("v.plan_id in (select plans.lineage(%s))", (pid,))
 
 
 def _fuel_load(d):

@@ -265,7 +265,32 @@ def plan_new(body: dict = Body(...), user=Depends(auth.require("planner"))):
                          values (%s,%s,%s,%s,%s,%s) returning id""",
                       (body["name"], body.get("unit_name"), body.get("complexity"), body.get("min_burn_boss"),
                        body.get("planned_window"), user["username"])).fetchone()
+        if body.get("geom"):  # drawn on the program map: the burn block becomes the plan's burn unit
+            c.execute("""insert into plans.feature (plan_id, kind, label, geom, updated_by)
+                         values (%s, 'burn_unit', %s, ST_SetSRID(ST_GeomFromGeoJSON(%s),4326), %s)""",
+                      (r["id"], body["name"], json.dumps(body["geom"]), user["username"]))
     return r
+
+
+@app.get("/api/blocks")
+def blocks(user=Depends(auth.current_user)):
+    """The program map: the burn unit of the newest version of every plan, with its status,
+    area, last fire on record (fuels.treatment) and site visit count."""
+    rows = db.all("""
+        with latest as (select p.* from plans.plan p where not exists (select 1 from plans.plan n where n.parent_plan_id = p.id)),
+        unit as (select plan_id, ST_Union(geom) g from plans.feature where kind = 'burn_unit' group by plan_id)
+        select l.id, l.name, l.unit_name, l.status, l.version_no, l.complexity, l.planned_window, l.demo, l.updated_at,
+               round((ST_Area(u.g::geography)/10000)::numeric, 1) as area_ha,
+               (select max(coalesce(t.ended_on, t.occurred_on)) from fuels.treatment t
+                 where t.kind in ('prescribed_burn','wildfire') and ST_Intersects(t.geom, u.g)) as last_fire,
+               (select count(*) from plans.element e where e.plan_id = l.id and e.status = 'complete') as complete,
+               (select count(*) from plans.element_def) as total,
+               (select max(b.burn_date) from plans.burn_day b where b.plan_id = l.id and b.decision = 'go') as burned_on,
+               (select count(*) from field.visit v where v.plan_id in (select plans.lineage(l.id))) as visits,
+               ST_AsGeoJSON(u.g, 6)::json as gj
+        from latest l join unit u on u.plan_id = l.id
+        where l.status <> 'cancelled' order by l.updated_at desc""")
+    return db.feature_collection(rows, geom_key="gj")
 
 
 @app.get("/api/plans/{pid}")

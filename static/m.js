@@ -23,14 +23,13 @@ async function boot() {
     document.getElementById("net").hidden = false;
   }
   const pick = document.getElementById("plan-pick");
-  pick.innerHTML = M.plans.map((p) => `<option value="${p.id}">${esc(p.name)} · v${p.version_no} · ${p.status}</option>`).join("");
-  const want = +(location.hash.slice(1)) || store.get("rx.lastPlan") || (M.plans[0] && M.plans[0].id);
-  if (want) pick.value = want;
-  pick.onchange = () => loadPlan(+pick.value);
+  pick.innerHTML = `<option value="all">Burn program: all blocks</option>` + M.plans.map((p) => `<option value="${p.id}">${esc(p.name)} · v${p.version_no} · ${p.status}</option>`).join("");
+  const want = location.hash.slice(1) || store.get("rx.lastPlan") || "all";
+  pick.value = String(want); if (!pick.value) pick.value = "all";
+  pick.onchange = () => (pick.value === "all" ? loadProgram() : loadPlan(+pick.value));
   buildLayerPanel();
   await Visit.init();
-  if (pick.value) loadPlan(+pick.value);
-  else { renderTabs(); Visit.render(); }
+  pick.value === "all" ? loadProgram() : loadPlan(+pick.value);
 }
 
 function showLogin() {
@@ -45,6 +44,27 @@ function showLogin() {
     try { await RX.api("/api/login", { method: "POST", body: { username: u.value, password: p.value } }); d.hidden = true; boot(); }
     catch (err) { document.getElementById("le").textContent = err.message; }
   };
+}
+
+// The whole program: every burn block, tap one to open its plan.
+async function loadProgram() {
+  store.set("rx.lastPlan", "all"); history.replaceState(null, "", "/m#all");
+  let fc;
+  try { fc = await RX.api("/api/blocks"); store.set("rx.blocks", fc); document.getElementById("net").hidden = true; }
+  catch (e) { if (e.status === 401) return showLogin(); fc = store.get("rx.blocks"); document.getElementById("net").hidden = false; if (!fc) return; }
+  M.bundle = null;
+  if (M.planLayer) M.map.removeLayer(M.planLayer);
+  const COL = { draft: "#9e9e9e", review: "#e0a100", approved: "#2e7d32", implemented: "#1565c0", closed: "#6d4c41" };
+  M.planLayer = L.geoJSON(fc, { style: (f) => ({ color: "#111", weight: 2, fillColor: COL[f.properties.status] || "#999", fillOpacity: 0.45 }),
+    onEachFeature: (f, l) => { l.bindTooltip(esc(f.properties.name), { permanent: true, direction: "center", className: "block-label" });
+      l.on("click", () => { document.getElementById("plan-pick").value = f.properties.id; loadPlan(f.properties.id); }); } }).addTo(M.map);
+  fitToSheet(M.planLayer.getBounds());
+  document.getElementById("mtabs").innerHTML = `<button role="tab" aria-selected="true">Burn blocks</button>`;
+  const el = document.getElementById("mpanel");
+  el.innerHTML = `<p class="hint">Tap a block on the map or below to open its plan.</p>` + fc.features.map((f) => { const p = f.properties; return `<div class="block-row" data-id="${p.id}" role="button" tabindex="0">
+    <div class="br-top"><span class="sw" style="background:${COL[p.status]}"></span><b>${esc(p.name)}</b><span class="spacer"></span><span class="badge ${p.status}">${p.status}</span></div>
+    <div class="br-meta">${p.area_ha} ha · ${esc(p.planned_window || "")} · last fire ${p.last_fire || "none on record"}</div></div>`; }).join("");
+  el.querySelectorAll(".block-row").forEach((r) => (r.onclick = () => { document.getElementById("plan-pick").value = r.dataset.id; loadPlan(+r.dataset.id); }));
 }
 
 async function loadPlan(id) {

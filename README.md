@@ -5,9 +5,12 @@ versioned PostGIS database of the landscape: fuels, fireguards, roads, water, re
 infrastructure, critical habitat, sensitive features and smoke receptors. Companion to
 [fwx](https://github.com/parklander/fwx) (fire weather); meant for `rx.rtams.ca`.
 
-- **Desktop editor** (`/`): plan list, map workspace, the 21 elements plus appendices A–F, map features,
+- **Burn program** (`/`): every burn block on one map, coloured by plan status, with area, window,
+  last fire on record, site visits and plan progress. **Add burn block** draws a new block and opens
+  its fire plan.
+- **Fire plan view** (`/#plan/<id>`): map workspace, the 21 elements plus appendices A–F, map features,
   values and fuels, prescription, ignition variants, burn days, versions and signatures, Word export.
-- **Mobile review** (`/m`): read-only map and plan for the field. GPS position, layers, ignition steps,
+- **Mobile** (`/m`): the burn program map (tap a block to open it), then the plan for the field. GPS position, layers, ignition steps,
   values, every element. The last plan opened is kept on the device and works offline; map tiles you
   have viewed are cached.
 

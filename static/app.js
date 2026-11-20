@@ -48,30 +48,68 @@ function showLogin() {
   document.getElementById("u").focus();
 }
 
-// --- plan list ------------------------------------------------------------------------
+// --- program view: every burn block on one map ---------------------------------------
+const STATUS_COLOR = { draft: "#9e9e9e", review: "#e0a100", approved: "#2e7d32", implemented: "#1565c0", closed: "#6d4c41" };
+const STATUS_ORDER = ["draft", "review", "approved", "implemented", "closed"];
 async function showList() {
+  S.view = "program"; S.mode = "program"; S.plan = null;
+  const fc = await call(() => RX.api("/api/blocks"));
   const plans = await call(() => RX.api("/api/plans"));
-  view.innerHTML = `<div class="page">
-    <div class="page-head"><h2>Prescribed fire plans</h2>${can("planner") ? '<button class="btn primary" id="np">New plan</button>' : ""}</div>
-    <table class="list"><thead><tr><th>Plan</th><th>Status</th><th class="num">Area</th><th>Elements complete</th><th>Window</th><th>Updated</th></tr></thead>
-    <tbody>${plans.map((p) => `<tr class="row" data-id="${p.id}" tabindex="0">
-      <td><b>${esc(p.name)}</b> ${p.demo ? '<span class="badge demo">DEMO</span>' : ""}<div class="hint">${esc(p.unit_name || "")} · v${p.version_no}</div></td>
-      <td><span class="badge ${p.status}">${p.status}</span></td>
-      <td class="num">${p.area_ha ?? "—"} ha</td>
-      <td><span class="bar"><i style="width:${Math.round(100 * p.complete / p.total)}%"></i></span> <span class="hint">${p.complete} / ${p.total}</span></td>
-      <td class="hint">${esc(p.planned_window || "")}</td><td class="hint">${p.updated_at.slice(0, 10)}</td></tr>`).join("")
-      || '<tr><td colspan="6" class="hint">No plans yet.</td></tr>'}</tbody></table></div>`;
-  view.querySelectorAll("tr.row").forEach((tr) => {
-    tr.onclick = () => (location.hash = `#plan/${tr.dataset.id}`);
-    tr.onkeydown = (e) => e.key === "Enter" && tr.onclick();
-  });
-  const np = document.getElementById("np");
-  if (np) np.onclick = async () => {
-    const name = prompt("Prescribed fire name (e.g. Burn Unit 12, spring 2027)");
-    if (!name) return;
-    const r = await call(() => RX.api("/api/plans", { method: "POST", body: { name } }));
-    location.hash = `#plan/${r.id}`;
+  const noBlock = plans.filter((p) => p.area_ha == null && p.status !== "cancelled");
+  view.innerHTML = `<div class="ws-bar"><h2>Burn program</h2><span class="meta" id="pstats"></span><span class="spacer"></span>
+      ${can("planner") ? '<button class="btn primary small" id="addblock">Add burn block</button>' : ""}</div>
+    <div class="ws"><div id="map"></div><div class="side"><div class="tabpanel" id="panel"></div></div></div>`;
+  buildMap();
+  const filt = new Set(STATUS_ORDER);
+  const ha = (st) => fc.features.filter((f) => f.properties.status === st).reduce((a, f) => a + (f.properties.area_ha || 0), 0);
+  document.getElementById("pstats").textContent = `${fc.features.length} blocks · ${Math.round(fc.features.reduce((a, f) => a + (f.properties.area_ha || 0), 0))} ha`;
+  S.blockLayer = L.geoJSON(fc, {
+    style: (f) => ({ color: "#111", weight: 2, fillColor: STATUS_COLOR[f.properties.status] || "#999", fillOpacity: 0.45 }),
+    onEachFeature: (f, l) => {
+      l.bindTooltip(esc(f.properties.name), { permanent: true, direction: "center", className: "block-label" });
+      l.on("click", () => selectBlock(f.properties.id, false));
+    },
+  }).addTo(S.map);
+  const b = S.blockLayer.getBounds(); if (b.isValid()) S.map.fitBounds(b, { padding: [40, 40], maxZoom: 14 }); else S.map.setView([49.72, -99.55], 11);
+  const panel = document.getElementById("panel");
+  const render = () => {
+    const rows = fc.features.map((f) => f.properties).filter((p) => filt.has(p.status));
+    panel.innerHTML = `<div class="legend-chips">${STATUS_ORDER.map((st) => `<button class="chip-f ${filt.has(st) ? "on" : ""}" data-st="${st}" aria-pressed="${filt.has(st)}">
+        <span class="sw" style="background:${STATUS_COLOR[st]}"></span>${st[0].toUpperCase() + st.slice(1)} <span class="hint">${Math.round(ha(st))} ha</span></button>`).join("")}</div>
+      <p class="hint">Click a block on the map or in the list. ${can("planner") ? "Add burn block draws a new one and starts its fire plan." : ""}</p>
+      ${rows.map((p) => `<div class="block-row" data-id="${p.id}" tabindex="0" role="button" aria-label="Select ${esc(p.name)}">
+        <div class="br-top"><span class="sw" style="background:${STATUS_COLOR[p.status]}"></span><b>${esc(p.name)}</b> ${p.demo ? '<span class="badge demo">DEMO</span>' : ""}
+          <span class="spacer"></span><span class="badge ${p.status}">${p.status}</span></div>
+        <div class="br-meta">${p.area_ha} ha · v${p.version_no} · ${esc(p.planned_window || "window not set")}</div>
+        <div class="br-meta">Last fire: ${p.last_fire || "none on record"}${p.burned_on ? ` · burned ${p.burned_on}` : ""} · ${p.visits} site visit${p.visits === 1 ? "" : "s"}</div>
+        <div class="br-meta"><span class="bar"><i style="width:${Math.round(100 * p.complete / p.total)}%"></i></span> ${p.complete} / ${p.total} elements</div>
+        <div class="br-actions" hidden><a class="btn primary small" href="#plan/${p.id}">Open fire plan ›</a></div></div>`).join("") || '<p class="hint">No burn blocks shown.</p>'}
+      ${noBlock.length ? `<h4>Plans without a burn block drawn</h4>${noBlock.map((p) => `<div class="feat"><span class="lbl">${esc(p.name)}</span><a class="btn small" href="#plan/${p.id}">Open</a></div>`).join("")}` : ""}`;
+    panel.querySelectorAll(".chip-f").forEach((c) => (c.onclick = () => { filt.has(c.dataset.st) ? filt.delete(c.dataset.st) : filt.add(c.dataset.st); applyFilter(); render(); }));
+    panel.querySelectorAll(".block-row").forEach((r) => { r.onclick = (e) => { if (e.target.closest("a")) return; selectBlock(+r.dataset.id, true); }; r.onkeydown = (e) => e.key === "Enter" && selectBlock(+r.dataset.id, true); });
+    if (S.selBlock) selectBlock(S.selBlock, false);
   };
+  const applyFilter = () => S.blockLayer.eachLayer((l) => {
+    const on = filt.has(l.feature.properties.status);
+    l.setStyle({ opacity: on ? 1 : 0, fillOpacity: on ? 0.45 : 0 }); on ? l.openTooltip() : l.closeTooltip();
+  });
+  render();
+  const add = document.getElementById("addblock");
+  if (add) add.onclick = () => { S.map.pm.enableDraw("Polygon", { continueDrawing: false }); toast("Draw the burn block on the map. Click the first point to finish; Esc cancels."); };
+}
+function selectBlock(id, zoom) {
+  S.selBlock = id;
+  document.querySelectorAll(".block-row").forEach((r) => { const on = +r.dataset.id === id; r.classList.toggle("sel", on); r.querySelector(".br-actions").hidden = !on; if (on && !zoom) r.scrollIntoView({ block: "nearest" }); });
+  S.blockLayer.eachLayer((l) => l.setStyle({ weight: l.feature.properties.id === id ? 5 : 2, color: l.feature.properties.id === id ? "#c2410c" : "#111" }));
+  const l = S.blockLayer.getLayers().find((x) => x.feature.properties.id === id);
+  if (l && zoom) S.map.fitBounds(l.getBounds(), { padding: [60, 60], maxZoom: 15 });
+}
+async function createBlock(gj) {
+  const name = prompt("Name for the new burn block (e.g. Burn Unit 12)");
+  if (!name) return showList();
+  const win = prompt("Planned burn window (optional, e.g. Apr 15 – May 14, 2027)", "") || null;
+  const r = await call(() => RX.api("/api/plans", { method: "POST", body: { name, planned_window: win, geom: gj } }));
+  toast("Burn block created: now build its fire plan"); location.hash = `#plan/${r.id}/features`;
 }
 
 // --- workspace -----------------------------------------------------------------------
@@ -79,7 +117,8 @@ async function showPlan(id, tab) {
   if (tab) S.tab = tab;
   const [plan, fc, ov] = await call(() => Promise.all([RX.api(`/api/plans/${id}`), RX.api(`/api/plans/${id}/features`), RX.api(`/api/plans/${id}/overlay`)]));
   S.plan = plan; S.featuresFC = fc; S.overlay = ov;
-  const freshMap = !S.map || !document.getElementById("map");
+  const freshMap = S.view !== "plan" || !document.getElementById("map");
+  S.view = "plan"; S.mode = "plan";
   if (freshMap) {
     view.innerHTML = `<div class="ws-bar" id="bar"></div><div class="ws"><div id="map"></div><div class="side">
       <div class="tabs" role="tablist" id="tabs"></div><div class="tabpanel" id="panel"></div></div></div>`;
@@ -98,7 +137,7 @@ function renderBar() {
   if (p.status === "review" && can("burn_boss")) actions += btn("approve", "Approve", "primary");
   if (["approved", "implemented", "closed"].includes(p.status) && can("planner") && !p.successor) actions += btn("amend", "Amend");
   if (p.successor) actions += `<a class="btn small" href="#plan/${p.successor.id}">Go to the amendment ›</a>`;
-  document.getElementById("bar").innerHTML = `<a class="btn small" href="#">‹ Plans</a>
+  document.getElementById("bar").innerHTML = `<a class="btn small" href="#">‹ Burn program</a>
     <h2>${esc(p.name)}</h2> ${p.demo ? '<span class="badge demo">DEMO</span>' : ""}<span class="badge ${p.status}">${p.status}</span>
     <span class="meta">v${p.version_no} · ${esc(p.complexity || "complexity —")} · ${esc(p.min_burn_boss || "")}${p.as_of ? " · data frozen " + p.as_of.slice(0, 16).replace("T", " ") : ""}</span>
     <span class="spacer"></span>${actions}
@@ -161,8 +200,9 @@ function fitPlan() {
 }
 
 async function onDrawn(e) {
-  const kind = S.drawKind; S.drawKind = null;
   const gj = e.layer.toGeoJSON().geometry; S.map.removeLayer(e.layer);
+  if (S.mode === "program") return createBlock(gj);
+  const kind = S.drawKind; S.drawKind = null;
   if (!kind) return;
   const label = prompt(`Label for this ${RX.KINDS[kind].label.toLowerCase()}`, "") ?? "";
   await call(() => RX.api(`/api/plans/${S.plan.id}/features`, { method: "POST", body: { kind, label, geom: gj } }));
