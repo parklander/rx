@@ -451,7 +451,7 @@ async function panelVisits(root) {
   root.insertAdjacentHTML("beforeend", `<p class="hint">Site visits are recorded in the field on the mobile view (Site visit tab): recce checks, photos, hazards and fuel plots.
     Fuel plots with a position are also added to the fuels database.</p>
     ${vs.map((v) => `<div class="feat"><span class="lbl"><b>${VKIND[v.kind] || v.kind}</b> · ${v.started_at.slice(0, 16).replace("T", " ")}<br>
-      <span class="hint">${esc(v.crew || "")} · ${v.n_records} records · ${v.n_photos} photos${v.n_issues ? ` · <b style="color:var(--bad)">${v.n_issues} issue${v.n_issues > 1 ? "s" : ""}</b>` : ""}</span></span>
+      <span class="hint">${v.crew ? esc(v.crew) + " · " : ""}${v.n_records} record${v.n_records === 1 ? "" : "s"} · ${v.n_photos} photo${v.n_photos === 1 ? "" : "s"}${v.n_issues ? ` · <b style="color:var(--bad)">${v.n_issues} issue${v.n_issues > 1 ? "s" : ""}</b>` : ""}</span></span>
       <button class="btn small" data-v="${v.id}">Open</button></div>`).join("") || '<p class="hint">No visits yet.</p>'}<div id="vview"></div>`);
   root.querySelectorAll("button[data-v]").forEach((b) => (b.onclick = () => openVisit(b.dataset.v)));
 }
@@ -461,7 +461,12 @@ async function openVisit(id) {
   S.visitLayer = L.geoJSON(records, { pointToLayer: (f, ll) => {
     const p = f.properties, [c, sym] = RSTYLE[p.kind] || ["#555", "•"];
     return L.marker(ll, { icon: L.divIcon({ className: "rx-pt", html: `<span style="background:${p.status === "issue" ? "#b3261e" : c}">${sym}</span>`, iconSize: null }) });
-  }, onEachFeature: (f, l) => { const p = f.properties; l.bindPopup(`<b>${esc(recLabel(p))}</b><br>${esc(p.text || "")}${p.media.map((m) => `<br><a href="/api/media/${m}" target="_blank"><img src="/api/media/${m}?size=thumb" style="width:160px;margin-top:4px" alt=""></a>`).join("")}`); } }).addTo(S.map);
+  }, onEachFeature: (f, l) => { const p = f.properties; l.bindPopup(`<b>${esc(recLabel(p))}</b><br>${esc(p.text || "")}${p.media.map((m) => `<br><a href="/api/media/${m.id}" target="_blank"><img src="/api/media/${m.id}?size=thumb" style="width:160px;margin-top:4px" alt=""></a>${m.heading != null ? `<br><span style="color:#666">facing ${Math.round(m.heading)}° ${RX.compassName(m.heading)}</span>` : ""}`).join("")}`); } }).addTo(S.map);
+  // photo directions: a wedge per photo showing what it looks at
+  records.features.forEach((f) => { if (!f.geometry) return; const [lon, lat] = f.geometry.coordinates;
+    f.properties.media.filter((m) => m.heading != null).forEach((m) => RX.fovWedge(lat, lon, m.heading, m.fov || 60)
+      .bindPopup(`<a href="/api/media/${m.id}" target="_blank"><img src="/api/media/${m.id}?size=thumb" style="width:200px" alt="Photo facing ${Math.round(m.heading)}°"></a><br>facing ${Math.round(m.heading)}° ${RX.compassName(m.heading)}`)
+      .addTo(S.visitLayer)); });
   const recs = records.features.map((f) => f.properties);
   const plots = recs.filter((r) => r.kind === "fuel_plot");
   document.getElementById("vview").innerHTML = `<h4>${VKIND[v.kind] || v.kind} · ${v.started_at.slice(0, 10)}</h4>
@@ -486,7 +491,7 @@ async function openVisit(id) {
 }
 const recLabel = (p) => p.kind === "check" ? `${((S.recce || []).find((i) => i.key === p.item)?.label || p.item).split(":")[0]} · ${p.status}` : p.kind === "fuel_plot" ? `Fuel plot ${p.data.plot_code || ""}` : p.kind === "hazard" ? `Hazard: ${p.item}` : p.kind;
 const recRow = (r) => `<div class="feat"><span class="lbl"><b>${esc(recLabel(r))}</b> <span class="m">${r.observed_at.slice(11, 16)} · ${esc(r.created_by || "")}</span>${r.text ? `<br>${esc(r.text)}` : ""}
-  ${r.media.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${r.media.map((m) => `<a href="/api/media/${m}" target="_blank"><img src="/api/media/${m}?size=thumb" style="width:64px;height:64px;object-fit:cover;border-radius:4px" alt="Photo"></a>`).join("")}</div>` : ""}</span>
+  ${r.media.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${r.media.map((m) => `<a href="/api/media/${m.id}" target="_blank" title="${m.heading != null ? "facing " + Math.round(m.heading) + "° " + RX.compassName(m.heading) : "direction not recorded"}"><img src="/api/media/${m.id}?size=thumb" style="width:64px;height:64px;object-fit:cover;border-radius:4px" alt="Photo${m.heading != null ? " facing " + RX.compassName(m.heading) : ""}"></a>`).join("")}</div>` : ""}</span>
   <button class="btn small" data-zoom="${r.id}">Map</button></div>`;
 
 // Burn days

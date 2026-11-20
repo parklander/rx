@@ -29,6 +29,9 @@ monitoring or fuel surveys.
   estimate; curing, height, cover, juniper %, litter depth, continuity. The load is worked out on the
   phone and again on the server, and each plot with a position is added to `fuels.plot`.
 - Every record carries the GPS position and accuracy. Photos are shrunk on the phone (2560 px).
+- **Photo direction**: the compass heading of the back camera is recorded with each photo (from the
+  phone's orientation sensors; set by hand with a slider when there is no reading). Maps show a
+  field-of-view wedge per photo (about 66° landscape, 50° portrait); clicking it opens the photo.
 - **Works offline**: visits, records and photos are kept on the phone (IndexedDB) with ids made on the
   phone, and are sent when there is a signal (also every 30 s). Resending is harmless.
 - On the desktop, **Site visits** lists each visit with its issues, fuel plot table, photos and map

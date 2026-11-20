@@ -47,6 +47,38 @@ function gpsLine(el) {
   el.className = "gps-line " + (V.fix.acc <= 10 ? "good" : V.fix.acc <= 30 ? "ok" : "poor");
 }
 
+// --- compass: which way the back camera faces --------------------------------------------
+// Heading of the camera (the device's -Z axis) from the W3C orientation angles, degrees clockwise from north.
+// null when the camera points steeply up or down (a heading means little there).
+const Compass = { heading: null, t: 0, started: false };
+function cameraHeading(alpha, beta, gamma) {
+  const r = Math.PI / 180, cA = Math.cos(alpha * r), sA = Math.sin(alpha * r), cB = Math.cos(beta * r), sB = Math.sin(beta * r), cG = Math.cos(gamma * r), sG = Math.sin(gamma * r);
+  const vx = -cA * sG - sA * sB * cG, vy = -sA * sG + cA * sB * cG;
+  if (Math.hypot(vx, vy) < 0.35) return null;
+  return (Math.atan2(vx, vy) / r + 360) % 360;
+}
+function onOrient(e) {
+  let alpha = null;
+  if (typeof e.webkitCompassHeading === "number") alpha = (360 - e.webkitCompassHeading) % 360;   // iOS
+  else if (e.absolute && e.alpha != null) alpha = e.alpha;                                           // Android (absolute)
+  if (alpha == null || e.beta == null) return;
+  Compass.heading = cameraHeading(alpha, e.beta, e.gamma || 0); Compass.t = Date.now();
+  document.querySelectorAll(".compass-line").forEach(compassLine);
+}
+async function startCompass() {
+  if (Compass.started) return;
+  try { if (typeof DeviceOrientationEvent !== "undefined" && DeviceOrientationEvent.requestPermission) { if (await DeviceOrientationEvent.requestPermission() !== "granted") return; } }
+  catch (_) { return; }
+  Compass.started = true;
+  if ("ondeviceorientationabsolute" in window) window.addEventListener("deviceorientationabsolute", onOrient);
+  else window.addEventListener("deviceorientation", onOrient);
+}
+function compassLine(el) {
+  const ok = Compass.heading != null && Date.now() - Compass.t < 3000;
+  el.textContent = ok ? `Camera facing ${Math.round(Compass.heading)}° ${RX.compassName(Compass.heading)}` : "Compass: no reading (hold the phone upright, or set the direction by hand)";
+  el.className = "compass-line " + (ok ? "good" : "wait");
+}
+
 // --- photos: shrink on the phone before storing ----------------------------------------
 async function shrink(file) {
   try {
@@ -54,8 +86,9 @@ async function shrink(file) {
     const s = Math.min(1, 2560 / Math.max(bmp.width, bmp.height));
     const cv = document.createElement("canvas"); cv.width = Math.round(bmp.width * s); cv.height = Math.round(bmp.height * s);
     cv.getContext("2d").drawImage(bmp, 0, 0, cv.width, cv.height);
-    return await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
-  } catch (_) { return file; }
+    const blob = await new Promise((res) => cv.toBlob(res, "image/jpeg", 0.85));
+    return { blob, w: cv.width, h: cv.height };
+  } catch (_) { return { blob: file, w: 0, h: 0 }; }
 }
 
 // --- sync -----------------------------------------------------------------------------------
@@ -72,6 +105,7 @@ async function sync() {
     }
     for (const p of (await getAll("photos")).filter((x) => !x.synced)) {
       const fd = new FormData(); fd.append("file", p.blob, "photo.jpg"); fd.append("media_id", p.id); fd.append("taken_at", p.taken_at);
+      if (p.heading_deg != null) { fd.append("heading_deg", p.heading_deg); fd.append("fov_deg", p.fov_deg); fd.append("heading_source", p.heading_source); }
       const r = await fetch(`/api/records/${p.record_id}/media`, { method: "POST", body: fd, credentials: "same-origin" });
       if (!r.ok) throw new Error("photo upload " + r.status);
       p.synced = true; await put("photos", p);
@@ -112,8 +146,11 @@ async function saveRecord(rec, files) {
   const r = { id: uuid(), visit_id: V.active.id, observed_at: new Date().toISOString(), lat: f ? f.lat : null, lon: f ? f.lon : null,
     accuracy_m: f ? f.acc : null, heading_deg: f && f.heading != null ? Math.round(f.heading) : null, synced: false, data: {}, ...rec };
   await put("records", r);
-  for (const file of files || []) {
-    await put("photos", { id: uuid(), record_id: r.id, blob: await shrink(file), taken_at: new Date(file.lastModified || Date.now()).toISOString(), synced: false });
+  for (const ph of files || []) {
+    const sm = await shrink(ph.file);
+    const fov = sm.w && sm.h ? (sm.w >= sm.h ? 66 : 50) : 60;   // typical phone main camera, landscape / portrait
+    await put("photos", { id: uuid(), record_id: r.id, blob: sm.blob, taken_at: new Date(ph.file.lastModified || Date.now()).toISOString(),
+      heading_deg: ph.heading == null ? null : Math.round(ph.heading), fov_deg: ph.heading == null ? null : fov, heading_source: ph.source, synced: false });
   }
   sync().then(() => Visit.render()); Visit.render(); drawRecords();
   return r;
@@ -125,8 +162,12 @@ async function drawRecords() {
   const local = V.active ? await getAll("records", "visit", V.active.id) : [];
   const seen = new Set(local.map((r) => r.id));
   const server = (V.serverRecords?.features || []).filter((f) => !seen.has(f.id) && f.geometry).map((f) => ({ ...f.properties, lon: f.geometry.coordinates[0], lat: f.geometry.coordinates[1] }));
+  const localPhotos = await getAll("photos");
   for (const r of [...local, ...server]) {
     if (r.lat == null) continue;
+    const dirs = r.media ? r.media.filter((m) => m.heading != null).map((m) => [m.heading, m.fov || 60])
+      : localPhotos.filter((p) => p.record_id === r.id && p.heading_deg != null).map((p) => [p.heading_deg, p.fov_deg || 60]);
+    for (const [h, fov] of dirs) RX.fovWedge(r.lat, r.lon, h, fov).addTo(V.layer);
     const [col, sym] = KIND_STYLE[r.kind] || ["#555", "•"];
     const color = r.kind === "check" && r.status === "issue" ? "#b3261e" : col;
     L.marker([r.lat, r.lon], { icon: L.divIcon({ className: "rx-pt", html: `<span style="background:${color}">${sym}</span>`, iconSize: null }) })
@@ -139,8 +180,8 @@ const recTitle = (r) => r.kind === "check" ? (V.recce.find((i) => i.key === r.it
 // --- capture sheet ------------------------------------------------------------------------------
 function openCapture(kind, opts = {}) {
   const wrap = document.getElementById("capture");
-  const photoField = `<div class="field"><label for="cph">Photos</label><input id="cph" type="file" accept="image/*" capture="environment" multiple>
-    <span class="hint">Opens the camera. Add more from the gallery by tapping again.</span><div id="cpprev" class="thumbs"></div></div>`;
+  const photoField = `<div class="field"><label for="cph">Photos</label><div class="compass-line"></div><input id="cph" type="file" accept="image/*" capture="environment" multiple>
+    <span class="hint">Opens the camera. The direction the camera faces is recorded with each photo; adjust it if needed.</span><div id="cpprev" class="photo-list"></div></div>`;
   let body = "";
   if (kind === "note" || kind === "photo") body = `<div class="field"><label for="ctx">${kind === "photo" ? "Caption" : "Note"}</label><textarea id="ctx"></textarea></div>`;
   if (kind === "check") body = `<p style="margin:0 0 8px"><b>${RX.esc(opts.label)}</b></p>
@@ -173,9 +214,22 @@ function openCapture(kind, opts = {}) {
     <button type="button" class="btn primary" id="caps" style="width:100%;min-height:48px;justify-content:center">Save</button></div>`;
   wrap.hidden = false;
   wrap.querySelectorAll(".gps-line").forEach(gpsLine);
+  wrap.querySelectorAll(".compass-line").forEach(compassLine);
   const files = [];
+  document.getElementById("cph").addEventListener("click", startCompass);
+  const showDir = (i) => { const ph = files[i], el = document.querySelector(`[data-ph-i="${i}"] .dirtext`);
+    el.textContent = ph.heading == null ? "Direction not set" : `${Math.round(ph.heading)}° ${RX.compassName(ph.heading)}${ph.source === "manual" ? " (set by hand)" : ""}`;
+    document.querySelector(`[data-ph-i="${i}"] .arrow`).style.transform = `rotate(${ph.heading || 0}deg)`; document.querySelector(`[data-ph-i="${i}"] .arrow`).style.opacity = ph.heading == null ? 0.2 : 1; };
   document.getElementById("cph").onchange = (e) => {
-    for (const f of e.target.files) { files.push(f); const u = URL.createObjectURL(f); document.getElementById("cpprev").insertAdjacentHTML("beforeend", `<img src="${u}" alt="">`); }
+    const fresh = Compass.heading != null && Date.now() - Compass.t < 3000;
+    for (const f of e.target.files) {
+      const i = files.length; files.push({ file: f, heading: fresh ? Compass.heading : null, source: fresh ? "compass" : null });
+      document.getElementById("cpprev").insertAdjacentHTML("beforeend", `<div class="photo-item" data-ph-i="${i}"><img src="${URL.createObjectURL(f)}" alt="">
+        <div class="dir"><span class="arrow" aria-hidden="true">↑</span><span class="dirtext"></span>
+        <label class="sr" for="hd${i}">Direction the photo faces (degrees)</label><input id="hd${i}" type="range" min="0" max="359" step="1" value="${Math.round(files[i].heading || 0)}"></div></div>`);
+      document.getElementById("hd" + i).oninput = (ev) => { files[i].heading = +ev.target.value; files[i].source = "manual"; showDir(i); };
+      showDir(i);
+    }
     e.target.value = "";
   };
   const $ = (id) => document.getElementById(id);
@@ -236,7 +290,7 @@ const Visit = {
         <div class="field"><label for="vw">Weather</label><input id="vw" name="weather" placeholder="Sky, wind, temperature"></div>
         <button class="btn primary" style="width:100%;min-height:48px;justify-content:center">Start site visit${M.bundle ? " for " + RX.esc(M.bundle.plan.name) : ""}</button></form>
         <p class="sync-state"></p>${await pastVisits()}`;
-      document.getElementById("vstart").onsubmit = (e) => { e.preventDefault(); startVisit(e.target); };
+      document.getElementById("vstart").onsubmit = (e) => { e.preventDefault(); startCompass(); startVisit(e.target); };
       countPending(); return;
     }
     const recs = (await getAll("records", "visit", V.active.id)).sort((a, b) => b.observed_at.localeCompare(a.observed_at));
@@ -259,7 +313,7 @@ const Visit = {
     el.querySelectorAll(".gps-line").forEach(gpsLine); countPending();
     for (const img of el.querySelectorAll("img[data-ph]")) { const p = photos.find((x) => x.id === img.dataset.ph); if (p) img.src = URL.createObjectURL(p.blob); }
     document.getElementById("vend").onclick = endVisit;
-    el.querySelectorAll("[data-cap]").forEach((b) => (b.onclick = () => openCapture(b.dataset.cap)));
+    el.querySelectorAll("[data-cap]").forEach((b) => (b.onclick = () => { startCompass(); openCapture(b.dataset.cap); }));
     el.querySelectorAll("[data-chk]").forEach((b) => (b.onclick = () => {
       const item = V.recce.find((i) => i.key === b.dataset.chk);
       if (b.dataset.st === "ok") saveRecord({ kind: "check", item: item.key, status: "ok", text: null });

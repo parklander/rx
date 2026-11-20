@@ -71,7 +71,7 @@ def visits(plan_id: Optional[int] = None, user=Depends(auth.current_user)):
 def _records(where, params):
     rows = db.all(f"""select r.id, r.visit_id, r.kind, r.item, r.status, r.text, r.data, r.accuracy_m, r.heading_deg,
                              r.observed_at, r.created_by, v.kind as visit_kind, v.plan_id,
-                             coalesce((select json_agg(m.id order by m.taken_at) from field.media m where m.record_id = r.id), '[]') as media,
+                             coalesce((select json_agg(json_build_object('id', m.id, 'heading', m.heading_deg, 'fov', m.fov_deg, 'source', m.heading_source) order by m.taken_at) from field.media m where m.record_id = r.id), '[]') as media,
                              ST_AsGeoJSON(r.geom, 7)::json as gj
                       from field.record r join field.visit v on v.id = r.visit_id where {where} order by r.observed_at""", params)
     feats = []
@@ -152,7 +152,9 @@ def record_delete(rid: str, user=Depends(auth.require("planner"))):
 
 @router.post("/api/records/{rid}/media")
 async def media_upload(rid: str, file: UploadFile = File(...), media_id: str = Form(...),
-                       taken_at: Optional[str] = Form(None), user=Depends(auth.require("planner"))):
+                       taken_at: Optional[str] = Form(None), heading_deg: Optional[float] = Form(None),
+                       fov_deg: Optional[float] = Form(None), heading_source: Optional[str] = Form(None),
+                       user=Depends(auth.require("planner"))):
     if db.one("select 1 from field.media where id = %s", (media_id,)):
         return {"id": media_id, "duplicate": True}
     if not db.one("select 1 from field.record where id = %s", (rid,)):
@@ -173,9 +175,11 @@ async def media_upload(rid: str, file: UploadFile = File(...), media_id: str = F
     th.thumbnail((THUMB_PX, THUMB_PX))
     th.save(MEDIA / name.replace(".jpg", "_t.jpg"), "JPEG", quality=80)
     with db.tx() as c:
-        c.execute("""insert into field.media (id, record_id, filename, content_type, bytes, width, height, taken_at, created_by)
-                     values (%s,%s,%s,'image/jpeg',%s,%s,%s,%s,%s) on conflict (id) do nothing""",
-                  (media_id, rid, name, (MEDIA / name).stat().st_size, im.width, im.height, _dt(taken_at), user["username"]))
+        c.execute("""insert into field.media (id, record_id, filename, content_type, bytes, width, height, taken_at, created_by,
+                                               heading_deg, fov_deg, heading_source)
+                     values (%s,%s,%s,'image/jpeg',%s,%s,%s,%s,%s,%s,%s,%s) on conflict (id) do nothing""",
+                  (media_id, rid, name, (MEDIA / name).stat().st_size, im.width, im.height, _dt(taken_at), user["username"],
+                   heading_deg % 360 if heading_deg is not None else None, fov_deg, heading_source))
     return {"id": media_id}
 
 

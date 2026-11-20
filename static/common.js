@@ -84,3 +84,14 @@ RX.basemaps = () => ({
   "Topographic": L.tileLayer("https://server.arcgisonline.com/ArcGIS/rest/services/World_Topo_Map/MapServer/tile/{z}/{y}/{x}", { maxZoom: 19, attribution: "Esri" }),
   "OpenStreetMap": L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19, attribution: "© OpenStreetMap contributors" }),
 });
+
+// Field-of-view wedge for a photo taken at (lat, lon) facing `heading` (deg from north) with a horizontal `fov`.
+RX.fovWedge = (lat, lon, heading, fov, radiusM = 80, style = {}) => {
+  const pts = [[lat, lon]], mLat = 111320, mLon = 111320 * Math.cos(lat * Math.PI / 180);
+  for (let a = heading - fov / 2; a <= heading + fov / 2 + 0.01; a += fov / 12) {
+    const r = a * Math.PI / 180;
+    pts.push([lat + (radiusM * Math.cos(r)) / mLat, lon + (radiusM * Math.sin(r)) / mLon]);
+  }
+  return L.polygon(pts, { color: "#00838f", weight: 1.5, fillColor: "#00e5ff", fillOpacity: 0.25, ...style });
+};
+RX.compassName = (d) => d == null ? "" : ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(((d % 360) + 360) % 360 / 45) % 8];
