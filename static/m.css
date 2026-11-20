@@ -31,3 +31,29 @@ details.el .body p { margin: 0; white-space: pre-wrap; }
 .step { display: flex; gap: 10px; padding: 6px 0; font-size: 15px; }
 .step b { background: var(--accent); color: #fff; border-radius: 50%; width: 24px; height: 24px; display: grid; place-items: center; flex: none; font-size: 13px; }
 .me-dot { width: 16px; height: 16px; background: #1f6fb2; border: 3px solid #fff; border-radius: 50%; box-shadow: 0 0 0 2px #1f6fb2; }
+.capture { position: fixed; inset: 0; z-index: 1500; background: rgba(0,0,0,.45); display: flex; align-items: flex-end; }
+.cap-card { background: var(--panel); width: 100%; max-height: 92dvh; overflow-y: auto; border-radius: 14px 14px 0 0; padding: 14px 16px calc(18px + env(safe-area-inset-bottom)); }
+.cap-head { display: flex; align-items: center; justify-content: space-between; }
+.cap-head h3 { margin: 0; font-size: 19px; }
+.gps-line { font-size: 13px; padding: 6px 8px; border-radius: 6px; margin: 8px 0 12px; font-variant-numeric: tabular-nums; background: #eee; }
+.gps-line.good { background: #e6f4e8; color: #1b5e20; } .gps-line.ok { background: #fff4de; color: #6b4300; } .gps-line.poor, .gps-line.wait { background: #fbecec; color: #8a1c1c; }
+.visit-head .gps-line { margin: 4px 0 0; }
+.cap-card .field input, .cap-card .field select, .cap-card .field textarea { min-height: 44px; font-size: 16px; }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+.cap-card .field input, .cap-card .field select, .cap-card .field textarea { width: 100%; min-width: 0; }
+.seg { display: flex; border: 1px solid #b9b4a8; border-radius: 8px; overflow: hidden; margin-bottom: 12px; }
+.seg label { flex: 1; } .seg input { position: absolute; opacity: 0; }
+.seg span { display: block; text-align: center; padding: 11px 6px; font-weight: 600; font-size: 14px; }
+.seg input:checked + span { background: var(--head); color: #fff; }
+.seg input:focus-visible + span { outline: 2px solid var(--focus); outline-offset: -3px; }
+.loadout { font-weight: 700; padding: 8px 10px; background: #f4f2ec; border-radius: 6px; margin-bottom: 12px; }
+.thumbs { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.thumbs img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; border: 1px solid var(--line); }
+.visit-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
+.sync-state { font-size: 13px; margin: 6px 0; } .sync-state.wait { color: var(--warn); } .sync-state.done { color: var(--ok); }
+.quick { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 6px 0 4px; }
+.quick .btn { min-height: 52px; justify-content: center; font-weight: 600; }
+.chk { display: flex; gap: 8px; align-items: center; padding: 8px 0; border-bottom: 1px solid #efede6; font-size: 14px; }
+.chk .lbl { flex: 1; } .chk-btns { display: flex; gap: 6px; } .chk-btns .btn { min-height: 40px; min-width: 52px; justify-content: center; }
+.btn.is-ok { background: var(--ok); border-color: var(--ok); color: #fff; } .btn.is-issue { background: var(--bad); border-color: var(--bad); color: #fff; }
+.rec { display: flex; gap: 10px; padding: 8px 0; border-bottom: 1px solid #efede6; font-size: 14px; } .rec .dot { margin-top: 5px; flex: none; } .rec .lbl { flex: 1; }

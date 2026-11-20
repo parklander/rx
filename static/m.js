@@ -28,7 +28,9 @@ async function boot() {
   if (want) pick.value = want;
   pick.onchange = () => loadPlan(+pick.value);
   buildLayerPanel();
+  await Visit.init();
   if (pick.value) loadPlan(+pick.value);
+  else { renderTabs(); Visit.render(); }
 }
 
 function showLogin() {
@@ -60,7 +62,7 @@ async function loadPlan(id) {
   if (M.planLayer) M.map.removeLayer(M.planLayer);
   M.planLayer = RX.featureLayer(M.bundle.features).addTo(M.map);
   fitToSheet(M.planLayer.getBounds());
-  renderTabs(); renderPanel();
+  renderTabs(); renderPanel(); Visit.planChanged();
 }
 
 function fitToSheet(b, maxZoom) {
@@ -121,13 +123,14 @@ document.getElementById("grip").onclick = () => {
   sheet.classList.contains("full") ? (sheet.classList.remove("full"), sheet.classList.add("min"))
     : sheet.classList.contains("min") ? sheet.classList.remove("min") : sheet.classList.add("full");
 };
-const MTABS = [["summary", "Summary"], ["ignition", "Ignition"], ["values", "Values"], ["elements", "Plan elements"], ["burn", "Burn days"]];
+const MTABS = [["summary", "Summary"], ["visit", "Site visit"], ["ignition", "Ignition"], ["values", "Values"], ["elements", "Plan elements"], ["burn", "Burn days"]];
 function renderTabs() {
   const n = document.getElementById("mtabs");
   n.innerHTML = MTABS.map(([k, l]) => `<button role="tab" aria-selected="${M.tab === k}" data-t="${k}">${l}</button>`).join("");
   n.querySelectorAll("button").forEach((b) => (b.onclick = () => { M.tab = b.dataset.t; renderTabs(); renderPanel(); }));
 }
 function renderPanel() {
+  if (M.tab === "visit") return Visit.render();
   const p = M.bundle.plan, el = document.getElementById("mpanel");
   const rng = (r) => r.low != null && r.high != null ? `${r.low}–${r.high}` : r.low != null ? `≥ ${r.low}` : r.high != null ? `≤ ${r.high}` : "—";
   if (M.tab === "summary") {

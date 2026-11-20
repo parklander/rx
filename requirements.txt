@@ -6,3 +6,5 @@ httpx
 python-docx
 pyproj
 shapely
+python-multipart
+pillow

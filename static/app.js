@@ -171,7 +171,7 @@ async function onDrawn(e) {
 
 // --- tabs --------------------------------------------------------------------------------
 const TABS = [["elements", "Elements"], ["features", "Map features"], ["values", "Values & fuels"], ["rx", "Prescription"],
-              ["variants", "Ignition variants"], ["burn", "Burn days"], ["versions", "Versions"]];
+              ["variants", "Ignition variants"], ["visits", "Site visits"], ["burn", "Burn days"], ["versions", "Versions"]];
 function renderTabs() {
   const t = document.getElementById("tabs");
   t.innerHTML = TABS.map(([k, l]) => `<button role="tab" aria-selected="${S.tab === k}" data-tab="${k}">${l}</button>`).join("");
@@ -180,7 +180,7 @@ function renderTabs() {
 function renderPanel() {
   const el = document.getElementById("panel");
   const lockNote = locked() ? `<div class="locked">This plan is ${S.plan.status}. It is locked: use <b>Amend</b> to make a new version.</div>` : "";
-  const fn = { elements: panelElements, features: panelFeatures, values: panelValues, rx: panelRx, variants: panelVariants, burn: panelBurn, versions: panelVersions }[S.tab];
+  const fn = { elements: panelElements, features: panelFeatures, values: panelValues, rx: panelRx, variants: panelVariants, visits: panelVisits, burn: panelBurn, versions: panelVersions }[S.tab];
   el.innerHTML = lockNote; fn(el);
 }
 
@@ -333,6 +333,53 @@ function variantForm(v, ro, isNew) {
     <div class="field"><label>Firing sequence (one step per line)</label><textarea name="steps" ${dis}>${esc((v.firing_sequence || []).map((s) => s.step).join("\n"))}</textarea></div>
     ${ro ? "" : `<div class="row-actions"><button class="btn primary">${isNew ? "Add variant" : "Save"}</button>${isNew ? "" : `<button type="button" class="btn small danger" data-vdel="${v.id}">Delete</button>`}</div>`}</form>`;
 }
+
+// Site visits (recorded on the mobile view)
+const VKIND = { pre_burn_recce: "Pre-burn recce", burn_day: "Burn day", post_burn: "Post-burn", monitoring: "Monitoring", fuel_survey: "Fuel survey", other: "Other" };
+const RSTYLE = { note: ["#1f6fb2", "N"], photo: ["#455a64", "P"], fuel_plot: ["#7a8b3a", "F"], check: ["#2e7d32", "✓"], hazard: ["#b3261e", "!"] };
+async function panelVisits(root) {
+  if (!S.recce) S.recce = await call(() => RX.api("/api/field/recce-items"));
+  const vs = await call(() => RX.api(`/api/visits?plan_id=${S.plan.id}`));
+  root.insertAdjacentHTML("beforeend", `<p class="hint">Site visits are recorded in the field on the mobile view (Site visit tab): recce checks, photos, hazards and fuel plots.
+    Fuel plots with a position are also added to the fuels database.</p>
+    ${vs.map((v) => `<div class="feat"><span class="lbl"><b>${VKIND[v.kind] || v.kind}</b> · ${v.started_at.slice(0, 16).replace("T", " ")}<br>
+      <span class="hint">${esc(v.crew || "")} · ${v.n_records} records · ${v.n_photos} photos${v.n_issues ? ` · <b style="color:var(--bad)">${v.n_issues} issue${v.n_issues > 1 ? "s" : ""}</b>` : ""}</span></span>
+      <button class="btn small" data-v="${v.id}">Open</button></div>`).join("") || '<p class="hint">No visits yet.</p>'}<div id="vview"></div>`);
+  root.querySelectorAll("button[data-v]").forEach((b) => (b.onclick = () => openVisit(b.dataset.v)));
+}
+async function openVisit(id) {
+  const { visit: v, records } = await call(() => RX.api(`/api/visits/${id}`));
+  if (S.visitLayer) S.map.removeLayer(S.visitLayer);
+  S.visitLayer = L.geoJSON(records, { pointToLayer: (f, ll) => {
+    const p = f.properties, [c, sym] = RSTYLE[p.kind] || ["#555", "•"];
+    return L.marker(ll, { icon: L.divIcon({ className: "rx-pt", html: `<span style="background:${p.status === "issue" ? "#b3261e" : c}">${sym}</span>`, iconSize: null }) });
+  }, onEachFeature: (f, l) => { const p = f.properties; l.bindPopup(`<b>${esc(recLabel(p))}</b><br>${esc(p.text || "")}${p.media.map((m) => `<br><a href="/api/media/${m}" target="_blank"><img src="/api/media/${m}?size=thumb" style="width:160px;margin-top:4px" alt=""></a>`).join("")}`); } }).addTo(S.map);
+  const recs = records.features.map((f) => f.properties);
+  const plots = recs.filter((r) => r.kind === "fuel_plot");
+  document.getElementById("vview").innerHTML = `<h4>${VKIND[v.kind] || v.kind} · ${v.started_at.slice(0, 10)}</h4>
+    <div class="hint">${esc(v.crew || "")}${v.weather ? " · " + esc(v.weather) : ""}${v.ended_at ? " · ended " + v.ended_at.slice(11, 16) : " · in progress"}</div>
+    ${v.notes ? `<p>${esc(v.notes)}</p>` : ""}
+    ${recs.some((r) => r.status === "issue") ? `<h4 style="color:var(--bad)">Issues</h4>` + recs.filter((r) => r.status === "issue").map(recRow).join("") : ""}
+    ${plots.length ? `<h4>Fuel plots</h4><table class="grid"><thead><tr><th>Plot</th><th>Class</th><th class="num">kg/m²</th><th class="num">Curing</th><th class="num">Height</th><th>Method</th></tr></thead><tbody>
+      ${plots.map((r) => `<tr><td>${esc(r.data.plot_code || "")}</td><td>${esc(r.data.fuel_class || "")}</td><td class="num">${r.data.load_kg_m2 ?? "—"}</td><td class="num">${r.data.curing_pct ?? "—"}</td><td class="num">${r.data.height_cm ?? "—"}</td><td>${esc(r.data.method || "")}</td></tr>`).join("")}</tbody></table>` : ""}
+    <h4>All records</h4>${recs.map(recRow).join("")}
+    ${can("planner") && !locked() ? `<div class="row-actions"><button class="btn small" id="v2e9">Copy issues into Element 9 (pre-burn considerations)</button></div>` : ""}`;
+  document.querySelectorAll("#vview [data-zoom]").forEach((b) => (b.onclick = () => { const l = S.visitLayer.getLayers().find((x) => x.feature.id === b.dataset.zoom); if (l) { S.map.setView(l.getLatLng(), 17); l.openPopup(); } }));
+  const e9 = document.getElementById("v2e9");
+  if (e9) e9.onclick = async () => {
+    const cur = (S.plan.elements["9"] || { content: {} }).content;
+    const lines = recs.filter((r) => r.status === "issue").map((r) => `- ${recLabel(r)}: ${r.text || ""}`).join("\n");
+    if (!lines) return toast("No issues to copy");
+    const content = { ...cur, onsite: ((cur.onsite || "") + `\n\nFrom the ${VKIND[v.kind] || v.kind} on ${v.started_at.slice(0, 10)}:\n` + lines).trim() };
+    await call(() => RX.api(`/api/plans/${S.plan.id}/elements/9`, { method: "PUT", body: { content, status: "draft" } }));
+    S.plan.elements["9"] = { content, status: "draft" }; toast("Added to Element 9");
+  };
+  const b = S.visitLayer.getBounds(); if (b.isValid()) S.map.fitBounds(b.pad(0.3), { maxZoom: 16 });
+}
+const recLabel = (p) => p.kind === "check" ? `${((S.recce || []).find((i) => i.key === p.item)?.label || p.item).split(":")[0]} · ${p.status}` : p.kind === "fuel_plot" ? `Fuel plot ${p.data.plot_code || ""}` : p.kind === "hazard" ? `Hazard: ${p.item}` : p.kind;
+const recRow = (r) => `<div class="feat"><span class="lbl"><b>${esc(recLabel(r))}</b> <span class="m">${r.observed_at.slice(11, 16)} · ${esc(r.created_by || "")}</span>${r.text ? `<br>${esc(r.text)}` : ""}
+  ${r.media.length ? `<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">${r.media.map((m) => `<a href="/api/media/${m}" target="_blank"><img src="/api/media/${m}?size=thumb" style="width:64px;height:64px;object-fit:cover;border-radius:4px" alt="Photo"></a>`).join("")}</div>` : ""}</span>
+  <button class="btn small" data-zoom="${r.id}">Map</button></div>`;
 
 // Burn days
 const CHECKLIST = [["permits", "Permits and notifications complete"], ["prep", "Pre-burn preparation (lines, wet lines, mowing) complete"],

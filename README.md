@@ -11,6 +11,27 @@ infrastructure, critical habitat, sensitive features and smoke receptors. Compan
   values, every element. The last plan opened is kept on the device and works offline; map tiles you
   have viewed are cached.
 
+## Site visits (mobile)
+
+The **Site visit** tab on `/m` records what is found on the ground: pre-burn recce, burn day, post-burn,
+monitoring or fuel surveys.
+
+- **Recce checklist**: holding and contingency lines, anchor point, access, water, safety zones,
+  escape routes, hazards, values, fuels, smoke, radio coverage. OK in one tap; *Issue* asks for a note
+  and photos.
+- **Photo points, notes, hazards** (UXO, snags, structures, power lines…).
+- **Fuel plots**: clip-and-weigh (frame area, wet weight, moisture or oven-dry weight) or a visual
+  estimate; curing, height, cover, juniper %, litter depth, continuity. The load is worked out on the
+  phone and again on the server, and each plot with a position is added to `fuels.plot`.
+- Every record carries the GPS position and accuracy. Photos are shrunk on the phone (2560 px).
+- **Works offline**: visits, records and photos are kept on the phone (IndexedDB) with ids made on the
+  phone, and are sent when there is a signal (also every 30 s). Resending is harmless.
+- On the desktop, **Site visits** lists each visit with its issues, fuel plot table, photos and map
+  markers, and can copy the issues into Element 9.
+
+Photos are stored under `RX_MEDIA_DIR` (default `media/` in the app folder) and copied nightly to
+`/var/backups/rx/media`.
+
 ## Data model
 
 One PostGIS database, one schema per domain:
@@ -24,6 +45,7 @@ One PostGIS database, one schema per domain:
 | `habitat` | `critical_habitat`, `sensitive_feature` (versioned); `observation` (records) |
 | `smoke` | `receptor` (versioned) |
 | `weather` | `forecast_snapshot`: forecasts frozen at decision points |
+| `field` | site visits, their records (checks, notes, hazards, fuel plots) and photos |
 | `meta` | users, sessions, layer catalogue, releases, the versioning functions |
 
 ### Versioning

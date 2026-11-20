@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 import auth
 import db
 import export_docx
+import field
 import forecast
 
 ROOT = Path(__file__).resolve().parent
@@ -44,6 +45,7 @@ async def lifespan(app):
 
 app = FastAPI(title="rx", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
+app.include_router(field.router)
 
 
 @app.get("/")
