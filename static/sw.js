@@ -1,5 +1,5 @@
 // rx service worker: app shell offline, map tiles cached as you view them.
-const SHELL = "rx-shell-v4", TILES = "rx-tiles-v1", MAX_TILES = 3000;
+const SHELL = "rx-shell-v5", TILES = "rx-tiles-v1", MAX_TILES = 3000;
 const SHELL_URLS = ["/m", "/static/style.css", "/static/m.css", "/static/common.js", "/static/forms.js", "/static/m.js", "/static/visit.js", "/static/icon-192.png",
   "/static/vendor/leaflet/leaflet.css", "/static/vendor/leaflet/leaflet.js"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_URLS)).then(() => self.skipWaiting())); });

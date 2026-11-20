@@ -128,6 +128,11 @@ def record_upsert(vid: str, body: dict = Body(...), user=Depends(auth.require("p
                        accuracy_m = excluded.accuracy_m, heading_deg = excluded.heading_deg, geom = excluded.geom, synced_at = now()""",
                   (body["id"], vid, body["kind"], body.get("item"), body.get("status"), body.get("text"), db.jsonb(data),
                    body.get("accuracy_m"), body.get("heading_deg"), _dt(body["observed_at"]), user["username"], lon, lon, lat))
+        # a prep-work check from the field updates the task (once per record)
+        if body["kind"] == "prep" and data.get("task_id") and data.get("status"):
+            import prep
+            prep.add_event(c, data["task_id"], data["status"], body.get("text"),
+                           {k: data[k] for k in ("width_m", "depth_cm") if data.get(k) not in (None, "")}, body["id"], user["username"])
         # a fuel plot with a position also becomes a record in the fuels database (once)
         if body["kind"] == "fuel_plot" and lon is not None and not c.execute(
                 "select 1 from fuels.plot where source_record = %s", (body["id"],)).fetchone():

@@ -112,7 +112,10 @@ def render(plan, defs, overlay, features=None):
                     if plan.get("receptors"):
                         doc.add_heading(label, level=2)
                         table(["Receptor", "Type", "Sensitivity", "km", "Bearing °"], [[r["name"], r.get("kind"), r.get("sensitivity"), r["km"], r["bearing"]] for r in plan["receptors"]])
-                elif src in ("mbca", "complexity_summary"):
+                elif src == "mitigation" and plan.get("prep_tasks"):
+                    doc.add_heading(label, level=2)
+                    table(["Work", "Lowers", "Status"], [[t["properties"]["title"], ", ".join(t["properties"]["mitigates"] or []), t["properties"]["status"]] for t in plan["prep_tasks"]])
+                elif src in ("mbca", "complexity_summary", "mitigation"):
                     continue
                 else:
                     kv(label, auto(src, content))
@@ -125,6 +128,11 @@ def render(plan, defs, overlay, features=None):
                 if comp == "prescription" and plan.get("prescription"):
                     doc.add_heading(label, level=2)
                     table(["Parameter", "Range", "Note"], [[PARAM_LABELS.get(x["param"], x["param"]), _rng(x.get("low"), x.get("high")), x.get("note") or ""] for x in plan["prescription"]])
+                if comp == "prep_tasks" and plan.get("prep_tasks"):
+                    doc.add_heading(label, level=2)
+                    table(["Work", "Type", "Width m", "Length m", "Area ha", "Standard", "Needed before", "Status"],
+                          [[t["properties"]["title"], t["properties"]["kind_label"], t["properties"]["width_m"], t["properties"]["length_m"],
+                            t["properties"]["area_ha"], t["properties"]["spec"], t["properties"]["required_for"], t["properties"]["status"]] for t in plan["prep_tasks"]])
                 if comp == "variants" and plan.get("variants"):
                     doc.add_heading(label, level=2)
                     for vv in plan["variants"]:

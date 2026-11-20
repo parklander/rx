@@ -40,6 +40,24 @@ monitoring or fuel surveys.
 Photos are stored under `RX_MEDIA_DIR` (default `media/` in the app folder) and copied nightly to
 `/var/backups/rx/media`.
 
+## Pre-burn work
+
+Jobs that lower a burn's complexity (mulch or mow along control lines, disc, grade, wet line, black
+line, brush/juniper removal, snag felling, protect an asset, water supply, signage) are drawn where
+they go: a line with its width (shown as a band), an area or a point. Each carries the standard to
+meet, depth, whether DAC clearance is needed, which PMS 424 complexity elements it lowers, when it is
+needed (before approval or ignition), a due date and who does it.
+
+- Status: planned → assigned → done → verified (or not needed), with every change kept (who, when,
+  note, measured width).
+- **Verified on site** from the mobile view: Prep work tab → *Check on site* during a site visit; the
+  check carries GPS, photos with direction, measured width and notes.
+- **GO is blocked** on a burn day while work needed before ignition is unverified, unless the burn
+  boss records a reason (kept with the burn day).
+- Element 9 lists the work; Element 3 shows what the post-plan risk ratings depend on; the Word
+  export includes both. A work order (.csv) and GeoJSON (for GPS units) can be downloaded.
+- The specification is locked with the plan at approval; status updates continue.
+
 ## Element forms
 
 Each element's fields are defined in `schema.py` (field types: text, textarea, number, date, time,

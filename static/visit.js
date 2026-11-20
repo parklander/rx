@@ -5,7 +5,7 @@ const V = { db: null, active: null, recce: [], fix: null, watch: null, layer: nu
 const FUEL_CLASSES = [["mixed_grass", "Mixed-grass"], ["grass_juniper", "Grass + juniper"], ["juniper", "Juniper-dominant"], ["aspen", "Aspen"], ["shrub", "Shrub"], ["other", "Other"]];
 const VISIT_KINDS = [["pre_burn_recce", "Pre-burn recce"], ["burn_day", "Burn day"], ["post_burn", "Post-burn"], ["monitoring", "Monitoring"], ["fuel_survey", "Fuel survey"], ["other", "Other"]];
 const HAZARDS = ["UXO / suspected UXO", "Snag / dead trees", "Structure", "Power line", "Fence / wire", "Washout / soft ground", "Steep slope", "Other"];
-const KIND_STYLE = { note: ["#1f6fb2", "N"], photo: ["#455a64", "P"], fuel_plot: ["#7a8b3a", "F"], check: ["#2e7d32", "✓"], hazard: ["#b3261e", "!"], water: ["#1f6fb2", "W"], access: ["#6d4c41", "A"] };
+const KIND_STYLE = { prep: ["#00838f", "W"], note: ["#1f6fb2", "N"], photo: ["#455a64", "P"], fuel_plot: ["#7a8b3a", "F"], check: ["#2e7d32", "✓"], hazard: ["#b3261e", "!"], water: ["#1f6fb2", "W"], access: ["#6d4c41", "A"] };
 
 // --- storage ------------------------------------------------------------------------
 function idb() {
@@ -153,6 +153,7 @@ async function saveRecord(rec, files) {
       heading_deg: ph.heading == null ? null : Math.round(ph.heading), fov_deg: ph.heading == null ? null : fov, heading_source: ph.source, synced: false });
   }
   sync().then(() => Visit.render()); Visit.render(); drawRecords();
+  if (M.tab === "prep") Visit.renderPrep();
   return r;
 }
 
@@ -174,7 +175,7 @@ async function drawRecords() {
       .bindPopup(`<b>${RX.esc(recTitle(r))}</b><br>${RX.esc(r.text || "")}<br><span style="color:#666">${(r.observed_at || "").slice(0, 16).replace("T", " ")}</span>`).addTo(V.layer);
   }
 }
-const recTitle = (r) => r.kind === "check" ? (V.recce.find((i) => i.key === r.item)?.label.split(":")[0] || r.item) + (r.status ? ` · ${r.status}` : "")
+const recTitle = (r) => r.kind === "prep" ? `Prep: ${r.data?.task_title || ""} · ${r.data?.status || ""}` : r.kind === "check" ? (V.recce.find((i) => i.key === r.item)?.label.split(":")[0] || r.item) + (r.status ? ` · ${r.status}` : "")
   : r.kind === "fuel_plot" ? `Fuel plot ${r.data?.plot_code || ""} · ${r.data?.load_kg_m2 ?? "?"} kg/m²` : r.kind === "hazard" ? `Hazard: ${r.item || ""}` : r.kind[0].toUpperCase() + r.kind.slice(1).replace("_", " ");
 
 // --- capture sheet ------------------------------------------------------------------------------
@@ -187,6 +188,10 @@ function openCapture(kind, opts = {}) {
   if (kind === "check") body = `<p style="margin:0 0 8px"><b>${RX.esc(opts.label)}</b></p>
     <div class="seg" role="radiogroup" aria-label="Result">${["ok", "issue", "n/a"].map((s) => `<label><input type="radio" name="cst" value="${s}" ${s === (opts.status || "ok") ? "checked" : ""}><span>${s === "ok" ? "OK" : s === "issue" ? "Issue" : "N/A"}</span></label>`).join("")}</div>
     <div class="field"><label for="ctx">Notes</label><textarea id="ctx" placeholder="What did you find? What needs doing?"></textarea></div>`;
+  if (kind === "prep") body = `<p style="margin:0 0 4px"><b>${RX.esc(opts.task.title)}</b></p><p class="hint" style="margin:0 0 8px">${RX.esc(opts.task.kind_label)}${opts.task.width_m ? ` · ${opts.task.width_m} m wide` : ""}${opts.task.spec ? ` · ${RX.esc(opts.task.spec)}` : ""}</p>
+    <div class="seg" role="radiogroup" aria-label="Result">${[["done", "Done"], ["verified", "Verified: meets the standard"], ["assigned", "Not done yet"]].map(([s2, l]) => `<label><input type="radio" name="pst" value="${s2}" ${s2 === (opts.status || "verified") ? "checked" : ""}><span>${l}</span></label>`).join("")}</div>
+    ${opts.task.width_m ? '<div class="field"><label for="pmw">Measured width (m)</label><input id="pmw" type="number" step="0.1" inputmode="decimal"></div>' : ""}
+    <div class="field"><label for="ctx">Notes</label><textarea id="ctx" placeholder="Gaps, regrowth, what still needs doing"></textarea></div>`;
   if (kind === "hazard") body = `<div class="field"><label for="chz">Hazard</label><select id="chz">${HAZARDS.map((h) => `<option>${h}</option>`).join("")}</select></div>
     <div class="field"><label for="ctx">Description</label><textarea id="ctx"></textarea></div>`;
   if (kind === "fuel_plot") {
@@ -208,7 +213,7 @@ function openCapture(kind, opts = {}) {
         <div class="field"><label for="fco">Continuity</label><select id="fco"><option value="">—</option><option>continuous</option><option>patchy</option><option>sparse</option></select></div></div>
       <div class="field"><label for="ctx">Notes</label><textarea id="ctx"></textarea></div>`;
   }
-  const titles = { note: "Note", photo: "Photo point", check: "Recce check", hazard: "Hazard", fuel_plot: "Fuel plot" };
+  const titles = { note: "Note", photo: "Photo point", check: "Recce check", hazard: "Hazard", fuel_plot: "Fuel plot", prep: "Pre-burn work check" };
   wrap.innerHTML = `<div class="cap-card" role="dialog" aria-modal="true" aria-labelledby="capt"><div class="cap-head"><h3 id="capt">${titles[kind]}</h3>
     <button type="button" class="btn small" id="capx">Cancel</button></div><div class="gps-line"></div>${body}${photoField}
     <button type="button" class="btn primary" id="caps" style="width:100%;min-height:48px;justify-content:center">Save</button></div>`;
@@ -253,6 +258,11 @@ function openCapture(kind, opts = {}) {
     let rec = { kind, text: txt };
     if (kind === "check") rec = { ...rec, item: opts.key, status: document.querySelector('input[name="cst"]:checked').value };
     if (kind === "hazard") rec = { ...rec, item: $("chz").value, status: "issue" };
+    if (kind === "prep") {
+      const st = document.querySelector('input[name="pst"]:checked').value;
+      rec = { ...rec, item: opts.task.kind, status: st === "assigned" ? "issue" : "ok",
+        data: { task_id: opts.task.id, task_title: opts.task.title, status: st, width_m: $("pmw") && $("pmw").value !== "" ? +$("pmw").value : null } };
+    }
     if (kind === "fuel_plot") {
       const num = (id) => ($(id).value === "" ? null : +$(id).value);
       const vis = document.querySelector('input[name="fm"]:checked').value === "visual";
@@ -321,6 +331,40 @@ const Visit = {
     }));
     document.getElementById("vnotes").onchange = async (e) => { V.active.notes = e.target.value; V.active.synced = false; await put("visits", V.active); sync(); };
   },
+};
+
+const PREP_COL = { planned: "#b3261e", assigned: "#e08a00", done: "#1565c0", verified: "#2e7d32", not_needed: "#9e9e9e" };
+Visit.prepLayer = (fc) => {
+  const g = L.featureGroup();
+  for (const f of fc.features) {
+    const p = f.properties, col = PREP_COL[p.status] || "#555";
+    if (p.band) L.geoJSON(p.band, { style: { color: col, weight: 1, fillColor: col, fillOpacity: 0.3 }, interactive: false }).addTo(g);
+    const l = L.geoJSON(f, { style: { color: col, weight: p.band ? 2 : 4, dashArray: p.status === "planned" ? "8 5" : null, fillOpacity: 0.2 },
+      pointToLayer: (_, ll) => L.marker(ll, { icon: L.divIcon({ className: "rx-pt", html: `<span style="background:${col}">W</span>`, iconSize: null }) }) })
+      .bindPopup(`<b>${RX.esc(p.title)}</b><br>${RX.esc(p.kind_label)}${p.width_m ? ` · ${p.width_m} m wide` : ""}<br>${p.status}`);
+    l.taskId = f.id; l.addTo(g);
+  }
+  return g;
+};
+Visit.renderPrep = async () => {
+  const el = document.getElementById("mpanel");
+  if (!M.bundle) return;
+  const fc = M.bundle.prep || { features: [] };
+  // statuses changed on this phone but not yet reflected in the bundle
+  const local = (await getAll("records")).filter((r) => r.kind === "prep");
+  const latest = {}; local.forEach((r) => { const t = r.data.task_id; if (!latest[t] || latest[t].observed_at < r.observed_at) latest[t] = r; });
+  el.innerHTML = `<p class="hint">Work to finish before the burn. ${V.active ? "Check each job on the ground: it is recorded in this site visit with GPS and photos." : "Start a site visit (Site visit tab) to record checks."}</p>` +
+    (fc.features.map((f) => { const t = f.properties, lr = latest[f.id]; const st = lr ? lr.data.status : t.status;
+      return `<div class="block-row" data-id="${f.id}"><div class="br-top"><span class="sw" style="background:${PREP_COL[st]}"></span><b>${RX.esc(t.title)}</b><span class="spacer"></span><span class="pstatus" style="border-color:${PREP_COL[st]};color:${PREP_COL[st]}">${st.replace("_", " ")}${lr && !lr.synced ? " ·" : ""}</span></div>
+        <div class="br-meta">${RX.esc(t.kind_label)}${t.width_m ? ` · ${t.width_m} m wide × ${Math.round(t.length_m)} m` : t.area_ha ? ` · ${t.area_ha} ha` : ""}</div>
+        ${t.spec ? `<div class="br-meta">Standard: ${RX.esc(t.spec)}</div>` : ""}
+        <div class="row-actions"><button class="btn small" data-zoom="${f.id}">Map</button>${V.active ? `<button class="btn small" data-chk="${f.id}">Check on site</button>` : ""}</div></div>`; }).join("")
+      || '<p class="hint">No pre-burn work in this plan.</p>');
+  el.querySelectorAll("[data-zoom]").forEach((b) => (b.onclick = () => {
+    const l = M.prepLayer && M.prepLayer.getLayers().find((x) => x.taskId === b.dataset.zoom);
+    if (l) { document.getElementById("sheet").classList.add("min"); setTimeout(() => { fitToSheet(l.getBounds(), 17); l.openPopup(); }, 220); }
+  }));
+  el.querySelectorAll("[data-chk]").forEach((b) => (b.onclick = () => { startCompass(); openCapture("prep", { task: { id: b.dataset.chk, ...fc.features.find((f) => f.id === b.dataset.chk).properties } }); }));
 };
 
 async function pastVisits() {

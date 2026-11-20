@@ -54,6 +54,7 @@ async function loadProgram() {
   catch (e) { if (e.status === 401) return showLogin(); fc = store.get("rx.blocks"); document.getElementById("net").hidden = false; if (!fc) return; }
   M.bundle = null;
   if (M.planLayer) M.map.removeLayer(M.planLayer);
+  if (M.prepLayer) { M.map.removeLayer(M.prepLayer); M.prepLayer = null; }
   const COL = { draft: "#9e9e9e", review: "#e0a100", approved: "#2e7d32", implemented: "#1565c0", closed: "#6d4c41" };
   M.planLayer = L.geoJSON(fc, { style: (f) => ({ color: "#111", weight: 2, fillColor: COL[f.properties.status] || "#999", fillOpacity: 0.45 }),
     onEachFeature: (f, l) => { l.bindTooltip(esc(f.properties.name), { permanent: true, direction: "center", className: "block-label" });
@@ -81,6 +82,8 @@ async function loadPlan(id) {
   }
   if (M.planLayer) M.map.removeLayer(M.planLayer);
   M.planLayer = RX.featureLayer(M.bundle.features).addTo(M.map);
+  if (M.prepLayer) M.map.removeLayer(M.prepLayer);
+  M.prepLayer = M.bundle.prep ? Visit.prepLayer(M.bundle.prep).addTo(M.map) : null;
   fitToSheet(M.planLayer.getBounds());
   renderTabs(); renderPanel(); Visit.planChanged();
 }
@@ -143,7 +146,7 @@ document.getElementById("grip").onclick = () => {
   sheet.classList.contains("full") ? (sheet.classList.remove("full"), sheet.classList.add("min"))
     : sheet.classList.contains("min") ? sheet.classList.remove("min") : sheet.classList.add("full");
 };
-const MTABS = [["summary", "Summary"], ["visit", "Site visit"], ["ignition", "Ignition"], ["values", "Values"], ["elements", "Plan elements"], ["burn", "Burn days"]];
+const MTABS = [["summary", "Summary"], ["visit", "Site visit"], ["prep", "Prep work"], ["ignition", "Ignition"], ["values", "Values"], ["elements", "Plan elements"], ["burn", "Burn days"]];
 function renderTabs() {
   const n = document.getElementById("mtabs");
   n.innerHTML = MTABS.map(([k, l]) => `<button role="tab" aria-selected="${M.tab === k}" data-t="${k}">${l}</button>`).join("");
@@ -151,6 +154,7 @@ function renderTabs() {
 }
 function renderPanel() {
   if (M.tab === "visit") return Visit.render();
+  if (M.tab === "prep") return Visit.renderPrep();
   const p = M.bundle.plan, el = document.getElementById("mpanel");
   const rng = (r) => r.low != null && r.high != null ? `${r.low}–${r.high}` : r.low != null ? `≥ ${r.low}` : r.high != null ? `≤ ${r.high}` : "—";
   if (M.tab === "summary") {

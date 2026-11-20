@@ -20,6 +20,7 @@ import db
 import export_docx
 import field
 import forecast
+import prep
 import schema
 
 ROOT = Path(__file__).resolve().parent
@@ -47,6 +48,7 @@ async def lifespan(app):
 app = FastAPI(title="rx", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 app.include_router(field.router)
+app.include_router(prep.router)
 
 
 @app.get("/")
@@ -311,6 +313,7 @@ def plan_get(pid: int, user=Depends(auth.current_user)):
                                  union all select p.id, p.parent_plan_id, p.version_no, p.status, p.amendment_note from plans.plan p join up on p.id = up.parent_plan_id)
            select id, version_no, status, amendment_note from up order by version_no""", (pid,))]
     p["successor"] = db.one("select id from plans.plan where parent_plan_id = %s", (pid,))
+    p["prep"] = prep.summarize(pid)
     c = db.one("""with u as (select ST_Centroid(ST_Union(geom)) g from plans.feature where plan_id = %s and kind = 'burn_unit')
                   select ST_Y(g) lat, ST_X(g) lon, ST_X(ST_Transform(g, 32614)) e, ST_Y(ST_Transform(g, 32614)) n from u where g is not null""", (pid,))
     p["centroid"] = {"lat": round(c["lat"], 5), "lon": round(c["lon"], 5), "utm": f"14U {c['e']:.0f} E {c['n']:.0f} N"} if c else None
@@ -523,6 +526,9 @@ def plan_amend(pid: int, body: dict = Body(...), user=Depends(auth.require("plan
         c.execute("insert into plans.feature (plan_id, kind, label, props, geom, updated_by) select %s, kind, label, props, geom, %s from plans.feature where plan_id = %s",
                   (new, user["username"], pid))
         c.execute("insert into plans.prescription_param (plan_id, param, low, high, note) select %s, param, low, high, note from plans.prescription_param where plan_id = %s", (new, pid))
+        c.execute("""insert into plans.prep_task (plan_id, kind, title, width_m, depth_cm, spec, dac_required, required_for, required_by, assigned_to, mitigates, status, geom, created_by)
+                     select %s, kind, title, width_m, depth_cm, spec, dac_required, required_for, required_by, assigned_to, mitigates, status, geom, %s
+                     from plans.prep_task where plan_id = %s""", (new, user["username"], pid))
         c.execute("""insert into plans.ignition_variant (plan_id, name, wind_dir_min, wind_dir_max, description, firing_sequence)
                      select %s, name, wind_dir_min, wind_dir_max, description, firing_sequence from plans.ignition_variant where plan_id = %s""", (new, pid))
     return {"id": new}
@@ -598,13 +604,19 @@ def burn_day_put(bid: int, body: dict = Body(...), user=Depends(auth.require("pl
         raise HTTPException(404)
     if body.get("decision") in ("go", "no_go") and auth.ROLES.index(user["role"]) < auth.ROLES.index("burn_boss"):
         raise HTTPException(403, "the go / no-go decision needs the burn_boss role")
+    if body.get("decision") == "go":
+        open_work = prep.summarize(bd["plan_id"])["outstanding_for_ignition"]
+        if open_work and not body.get("override_reason"):
+            raise HTTPException(409, "pre-burn work needed before ignition is not verified: " + "; ".join(f"{w['title']} ({w['status']})" for w in open_work))
+        if open_work:
+            body["notes"] = (body.get("notes") or bd["notes"] or "") + "\nGO with unverified pre-burn work (" + ", ".join(w["title"] for w in open_work) + "): " + body["override_reason"]
     with db.tx() as c:
         c.execute("""update plans.burn_day set variant_id = coalesce(%s, variant_id), checklist = coalesce(%s, checklist),
                        notes = coalesce(%s, notes), test_fire_result = coalesce(%s, test_fire_result),
                        observed_wx = coalesce(%s, observed_wx),
                        decision = coalesce(%s, decision),
-                       decided_by = case when %s is not null then %s else decided_by end,
-                       decided_at = case when %s is not null then now() else decided_at end
+                       decided_by = case when %s::text is not null then %s else decided_by end,
+                       decided_at = case when %s::text is not null then now() else decided_at end
                      where id = %s""",
                   (body.get("variant_id"), db.jsonb(body["checklist"]) if "checklist" in body else None, body.get("notes"),
                    body.get("test_fire_result"), db.jsonb(body["observed_wx"]) if "observed_wx" in body else None,
@@ -621,6 +633,7 @@ def plan_export(pid: int, user=Depends(auth.current_user)):
     plan = plan_get(pid, user)
     defs = element_defs(user)
     overlay = plan_overlay(pid, user)
+    plan["prep_tasks"] = prep.prep_list(pid, user)["features"]
     data = export_docx.render(plan, defs, overlay, plan_features(pid, user))
     fname = re.sub(r"[^A-Za-z0-9_-]+", "_", plan["name"]) + f"_v{plan['version_no']}.docx"
     return Response(data, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -630,5 +643,5 @@ def plan_export(pid: int, user=Depends(auth.current_user)):
 @app.get("/api/plans/{pid}/bundle")
 def plan_bundle(pid: int, user=Depends(auth.current_user)):
     """Everything the mobile review view needs, in one request it can cache for offline use."""
-    return {"plan": plan_get(pid, user), "defs": element_defs(user), "features": plan_features(pid, user),
+    return {"plan": plan_get(pid, user), "defs": element_defs(user), "features": plan_features(pid, user), "prep": prep.prep_list(pid, user),
             "overlay": plan_overlay(pid, user), "fetched_at": datetime.now(timezone.utc).isoformat()}

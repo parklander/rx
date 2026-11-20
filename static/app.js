@@ -113,9 +113,9 @@ async function createBlock(gj) {
 }
 
 // --- fire plan view: elements on the left, the selected element on the right -------------
-const NAV_GROUPS = [["Map and data", [["map", "Plan map"], ["values", "Values and fuels"], ["visits", "Site visits"]]],
+const NAV_GROUPS = [["Map and data", [["map", "Plan map"], ["prep", "Pre-burn work"], ["values", "Values and fuels"], ["visits", "Site visits"]]],
                     ["Implementation", [["burn", "Burn days"], ["versions", "Versions and signatures"]]]];
-const MAP_VIEWS = new Set(["map", "values", "visits"]);
+const MAP_VIEWS = new Set(["map", "prep", "values", "visits"]);
 async function showPlan(id, sel) {
   S.sel = sel || (S.planId === id && S.sel) || "e-4";
   const [plan, fc, ov] = await call(() => Promise.all([RX.api(`/api/plans/${id}`), RX.api(`/api/plans/${id}/features`), RX.api(`/api/plans/${id}/overlay`)]));
@@ -156,12 +156,14 @@ function renderMain() {
   const main = document.getElementById("main");
   S.mapEl.remove(); main.innerHTML = "";
   if (S.visitLayer) { S.map.removeLayer(S.visitLayer); S.visitLayer = null; }
+  if (S.prepLayer) { S.map.removeLayer(S.prepLayer); S.prepLayer = null; }
+  S.mode = "plan";
   const lock = locked() ? `<div class="locked">This plan is ${S.plan.status} and locked. Use <b>Amend</b> to make a new version.</div>` : "";
   if (S.sel.startsWith("e-")) return renderElement(main, S.sel.slice(2), lock);
   if (MAP_VIEWS.has(S.sel)) {
     main.innerHTML = `<div class="split"><div class="map-slot" id="mslot"></div><div class="split-side" id="side">${lock}</div></div>`;
     placeMap("mslot");
-    return ({ map: panelFeatures, values: panelValues, visits: panelVisits })[S.sel](document.getElementById("side"));
+    return ({ map: panelFeatures, prep: panelPrep, values: panelValues, visits: panelVisits })[S.sel](document.getElementById("side"));
   }
   main.innerHTML = `<div class="doc">${lock}<h2 class="doc-title">${S.sel === "burn" ? "Burn days" : "Versions and signatures"}</h2><div id="docbody"></div></div>`;
   ({ burn: panelBurn, versions: panelVersions })[S.sel](document.getElementById("docbody"));
@@ -188,6 +190,12 @@ function autoHtml(src, live) {
     case "test_fire_site": { const l = list("test_fire_site"); return l ? `<ul>${l}</ul>` : none("a test fire site"); }
     case "holding_lines": { const h = list("holding_line", "m"), c = list("contingency_line", "m"); return h || c ? `<b>Holding</b><ul>${h || "<li>none</li>"}</ul><b>Contingency</b><ul>${c || "<li>none</li>"}</ul>` : none("holding lines"); }
     case "trigger_points": { const l = list("trigger_point"); return l ? `<ul>${l}</ul>` : none("trigger points"); }
+    case "mitigation": {
+      const s = p.prep; if (!s || !s.total) return `<span class="hint">No pre-burn work recorded. Add it under <a href="#plan/${p.id}/prep">Pre-burn work</a>; post-plan ratings assume it is done and verified.</span>`;
+      return `${s.total} job${s.total > 1 ? "s" : ""}: ${s.by_status.verified} verified, ${s.by_status.done} done, ${s.by_status.assigned} assigned, ${s.by_status.planned} planned.
+        ${s.outstanding_for_ignition.length ? `<div class="warn">Not yet verified (needed before ignition): ${s.outstanding_for_ignition.map((w) => esc(w.title)).join(", ")}</div>` : ""}
+        <div class="hint">Post-plan risk assumes this work is done. <a href="#plan/${p.id}/prep">Open pre-burn work ›</a></div>`;
+    }
     case "cost_total": { const t = (live.costs || []).reduce((a, r) => a + (+r.amount || 0), 0); return `$${t.toLocaleString()}`; }
     case "mbca": {
       const w = (live.windows || []).filter((r) => r.from && r.to);
@@ -227,7 +235,7 @@ function renderElement(main, code, lock) {
   refreshAuto();
   form.querySelectorAll(".component").forEach((c) => {
     const box = document.createElement("div"); c.appendChild(box);
-    ({ prescription: panelRx, variants: panelVariants, signatures: panelSignatures })[c.dataset.component](box);
+    ({ prescription: panelRx, variants: panelVariants, signatures: panelSignatures, prep_tasks: panelPrepComponent })[c.dataset.component](box);
   });
   const st = document.getElementById("est"); if (st) st.value = e.status === "complete" ? "complete" : "draft";
   if (st) st.onchange = () => { S.dirty = true; };
@@ -319,6 +327,7 @@ function fitPlan() {
 async function onDrawn(e) {
   const gj = e.layer.toGeoJSON().geometry; S.map.removeLayer(e.layer);
   if (S.mode === "program") return createBlock(gj);
+  if (S.mode === "prep" && S.prepPending) { const fn = S.prepPending; S.prepPending = null; S.mode = "plan"; return fn(gj); }
   const kind = S.drawKind; S.drawKind = null;
   if (!kind) return;
   const label = prompt(`Label for this ${RX.KINDS[kind].label.toLowerCase()}`, "") ?? "";
@@ -524,6 +533,9 @@ async function openBurnDay(id) {
       <div class="hours" aria-label="Hourly check 06:00 to 21:00">${fc.hours.map((h) => `<div class="${h.ok_for_variant ? "go" : "no"} ${h.ignition_period ? "ign" : ""}" title="${h.hour}:00 · ${h.temp_c}°C ${h.rh_pct}% ${h.wind_kmh} km/h from ${h.wind_dir_deg}°${h.fails.length ? " · " + h.fails.join("; ") : ""}">${h.hour}</div>`).join("")}</div>
       <p class="hint">Outlined hours are the ignition period. GO windows: ${fc.go_windows.join(", ") || "none"}. Suggested variant: <b>${esc(fc.suggested_variant || "none")}</b>.
       ${fc.unchecked_params.length ? `Not in the forecast, check separately: ${fc.unchecked_params.map((k) => RX.PARAMS[k] || k).join(", ")}.` : ""}</p>` : ""}
+    <h4>Pre-burn work</h4>${S.plan.prep && S.plan.prep.total ? (S.plan.prep.outstanding_for_ignition.length
+      ? `<div class="locked">Not yet verified: ${S.plan.prep.outstanding_for_ignition.map((w) => esc(w.title) + " (" + w.status + ")").join(", ")}. GO is blocked until verified.</div>`
+      : '<div class="ok-note">All pre-burn work needed before ignition is verified.</div>') : '<p class="hint">No pre-burn work in the plan.</p>'}
     <h4>Go / no-go checklist (Element 2B)</h4>
     ${CHECKLIST.map(([k, l]) => `<label style="display:flex;gap:8px;padding:3px 0;font-size:14px"><input type="checkbox" data-ck="${k}" ${bd.checklist?.[k]?.ok ? "checked" : ""}> ${l}</label>`).join("")}
     <div class="field" style="margin-top:8px"><label for="bdvar">Ignition variant</label><select id="bdvar"><option value="">—</option>${v.map((x) => `<option value="${x.id}" ${bd.variant_id === x.id ? "selected" : ""}>${esc(x.name)} (${x.wind_dir_min}–${x.wind_dir_max}°)</option>`).join("")}</select></div>
@@ -539,7 +551,14 @@ async function openBurnDay(id) {
   };
   const save = (decision) => async () => {
     if (decision === "go" && !confirm("Record a GO decision for this burn day?")) return;
-    await call(() => RX.api(`/api/burn-days/${id}`, { method: "PUT", body: body(decision) })); toast("Burn day saved");
+    try { await RX.api(`/api/burn-days/${id}`, { method: "PUT", body: body(decision) }); }
+    catch (e) {
+      if (e.status !== 409) return toast(e.message, true);
+      const why = prompt(`${e.message}.\n\nTo record GO anyway, give the reason (it is kept with the burn day):`);
+      if (!why) return;
+      await call(() => RX.api(`/api/burn-days/${id}`, { method: "PUT", body: { ...body(decision), override_reason: why } }));
+    }
+    toast("Burn day saved");
     if (decision) { await showPlan(S.plan.id, "burn"); } openBurnDay(id);
   };
   document.getElementById("bdsave").onclick = save();

@@ -61,6 +61,7 @@ SCHEMA = {
         {"key": "post_risk", "label": "Post-plan risk", "type": "select", "options": LMH},
         {"key": "difficulty", "label": "Technical difficulty", "type": "select", "options": LMH},
         {"key": "rationale", "label": "Rationale / mitigation", "type": "text"}]},
+    {"key": "mitigation", "label": "Pre-burn work that lowers complexity", "type": "auto", "source": "mitigation"},
     {"key": "summary", "label": "Summary rating", "type": "auto", "source": "complexity_summary"},
     {"key": "final", "label": "Final complexity (agency administrator)", "type": "select", "options": LMH},
     {"key": "rationale", "label": "Rationale for the final rating", "type": "textarea"},
@@ -119,10 +120,11 @@ SCHEMA = {
     {"key": "constraints_notes", "label": "Constraint notes", "type": "textarea"},
   ],
   "9": [
-    {"key": "onsite", "label": "On-site preparation", "type": "table", "columns": [
+    {"key": "prep", "label": "Pre-burn work on the map (lowers complexity; verified before ignition)", "type": "component", "component": "prep_tasks"},
+    {"key": "onsite", "label": "Other preparation (no map location)", "type": "table", "columns": [
         {"key": "task", "label": "Task", "type": "text"}, {"key": "who", "label": "Who", "type": "text"},
         {"key": "due", "label": "Due", "type": "date"}, {"key": "done", "label": "Done", "type": "bool"}],
-     "rows": [{"task": "Disc / mow holding lines"}, {"task": "Wet line around exclusions"}, {"task": "Protect vulnerable infrastructure"}, {"task": "Pre-burn recce (site visit)"}]},
+     "rows": [{"task": "Pre-burn recce (site visit)"}, {"task": "Book range with Range Control"}]},
     {"key": "offsite", "label": "Off-site considerations", "type": "textarea"},
     {"key": "forecast_sources", "label": "Weather and smoke forecasts", "type": "multi", "options": ["Burn-morning forecast (rx)", "fwx.rtams.ca", "ECCC spot / public forecast", "CWFIS", "On-site belt weather", "Base weather station"]},
     {"key": "forecast_frequency", "label": "How often", "type": "text", "default": "Daily from 3 days out; burn morning; hourly on site"},
