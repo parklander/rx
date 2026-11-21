@@ -70,6 +70,7 @@ SCHEMA = {
     {"key": "location", "label": "Location", "type": "auto", "source": "location"},
     {"key": "size", "label": "Size", "type": "auto", "source": "size"},
     {"key": "range_area", "label": "Range / training area", "type": "text"},
+    {"key": "terrain_table", "label": "Terrain (from the DEM)", "type": "auto", "source": "terrain", "tag": "calculated from the DEM"},
     {"key": "elev_min", "label": "Elevation low (m)", "type": "number"},
     {"key": "elev_max", "label": "Elevation high (m)", "type": "number"},
     {"key": "slope", "label": "Slope (%)", "type": "text"},

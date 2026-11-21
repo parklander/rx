@@ -497,6 +497,27 @@ def plan_overlay(pid: int, user=Depends(auth.current_user)):
             "fuels": [db._plain(f) for f in fuels]}
 
 
+@app.get("/api/plans/{pid}/terrain")
+def plan_terrain(pid: int, user=Depends(auth.current_user)):
+    """Elevation, slope and aspect for the burn unit and each ignition unit, from the current DEM version."""
+    import terrain
+    _plan(pid)
+    ver = terrain.current()
+    out = {"dem": terrain.dem_info(ver), "unit": None, "ignition_units": []}
+    if not ver:
+        return out
+    unit = db.one("select ST_AsGeoJSON(ST_Union(geom))::json g from plans.feature where plan_id = %s and kind = 'burn_unit'", (pid,))
+    try:
+        if unit and unit["g"]:
+            out["unit"] = terrain.stats(unit["g"], ver)
+        for r in db.all("""select coalesce(label, 'Ignition unit') label, ST_AsGeoJSON(geom)::json g from plans.feature
+                           where plan_id = %s and kind = 'ignition_unit' order by label""", (pid,)):
+            out["ignition_units"].append({"label": r["label"], **(terrain.stats(r["g"], ver) or {})})
+    except Exception as e:   # a missing or unreadable DEM file should not break the plan view
+        out["error"] = f"{type(e).__name__}: {e}"
+    return out
+
+
 @app.post("/api/plans/{pid}/status")
 def plan_status(pid: int, body: dict = Body(...), user=Depends(auth.require("planner"))):
     p = _plan(pid)

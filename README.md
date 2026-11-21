@@ -218,6 +218,39 @@ python manage.py sync-habitat --file CriticalHabitat.zip   # a zip downloaded by
 journalctl -u rx-habitat-sync             # output of the weekly runs
 ```
 
+## Elevation (DEM)
+
+`dem_sync.py` keeps a 5 m terrain model (DTM) of the Shilo area, and Element 4 works out elevation,
+slope and aspect from it. A systemd timer checks every Monday at about 04:47.
+
+**Sources**, in priority order (each cell takes the first one that has a value; band 2 of the file records which):
+
+| Source | Cells | Heights | Notes |
+|---|---|---|---|
+| NRCan HRDEM Mosaic 2 m (STAC `hrdem-mosaic-2m`) | lidar | CGVD2013 | best where it exists |
+| Google GEM-15 (`RX_DEM_GEM_URLS`) | 15 m, stereo satellite, bare earth predicted by a model | EGM96 | experimental; shifted onto CGVD2013 by the median difference from NRCan data where they overlap; CC-BY 4.0 "This dataset was produced by Google" |
+| NRCan MRDEM 30 m (STAC `mrdem-30`) | 30 m | CGVD2013 | complete coverage, fills the rest |
+
+1. **Check**: NRCan's STAC catalogue (item date) and each file's HTTP headers, plus the area and resolution,
+   make a fingerprint. If it matches the current version, nothing is read.
+2. **Build**: only the area is read, straight from the Cloud Optimized GeoTIFFs at the coarsest overview finer
+   than 5 m, into EPSG:2957 (NAD83(CSRS) / UTM 14N), tile by tile. The area is `RX_DEM_BBOX` (default the RTA)
+   widened to every burn block and contingency area, so a block outside it causes a rebuild.
+3. **Version**: saved as a COG under `/var/lib/rx/sources/nrcan_dem/`, recorded in `meta.raster_version` and
+   marked current; the previous file is kept, older ones deleted. Each check is logged in `meta.source_sync`.
+
+**In the plan**: Element 4 shows a terrain table for the burn unit and each ignition unit (low, high, relief,
+mean / 90th percentile / max slope %, aspects). The first time the element is opened with empty fields, the
+burn unit's figures are filled in; *Fill elevation, slope and aspect from the DEM* does it again. The filled
+values are saved with the element, so an approved plan keeps them when a new DEM version arrives. Slope uses
+central differences at 5 m; cells under `RX_FLAT_SLOPE_PCT` (default 2%) count as flat.
+
+```bash
+python manage.py sync-dem             # check, rebuild only if new
+python manage.py sync-dem --dry-run   # show what would be built
+python manage.py sync-dem --force     # rebuild anyway
+```
+
 ## Next
 
 - Map products: the six PMS 484-1 map templates generated from a plan (vicinity, project, fuels,

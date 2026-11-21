@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly elevation (DEM) check for rx
+
+[Timer]
+OnCalendar=Mon *-*-* 04:47
+RandomizedDelaySec=20m
+Persistent=true
+
+[Install]
+WantedBy=timers.target
