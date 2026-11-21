@@ -303,7 +303,7 @@ function buildMap() {
     L.DomEvent.disableClickPropagation(wrap); L.DomEvent.disableScrollPropagation(wrap);
     d.innerHTML = `<div class="sec">Basemap</div>${Object.keys(bm).map((k, i) => `<label><input type="radio" name="bm" value="${k}" ${i === 0 ? "checked" : ""}> ${k}</label>`).join("")}
       <div class="sec">Landscape layers</div>
-      ${S.layers.filter((l) => l.visible).map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${l.kind === "event" ? ' <span class="hint">(records)</span>' : ""}</label>`).join("")}
+      ${S.layers.filter((l) => l.visible).map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${l.kind === "event" ? ' <span class="hint">(records)</span>' : ""}${RX.layerNote(l)}</label>`).join("")}
       <div class="sec">Show layers as on</div><input type="date" id="asof" aria-label="Show landscape layers as they were on this date">
       <div class="hint" style="margin-top:4px">Blank = current.</div>`;
     d.querySelectorAll('input[name="bm"]').forEach((r) => (r.onchange = () => { Object.values(bm).forEach((b) => S.map.removeLayer(b)); bm[r.value].addTo(S.map).bringToBack(); }));

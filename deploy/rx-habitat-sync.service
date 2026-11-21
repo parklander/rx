@@ -1,0 +1,13 @@
+[Unit]
+Description=rx: check ECCC critical habitat and load a new version if published
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=rx
+Group=rx
+WorkingDirectory=/opt/rx
+EnvironmentFile=/etc/rx.env
+ExecStart=/opt/rx/.venv/bin/python habitat_sync.py
+Nice=10

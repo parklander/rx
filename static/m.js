@@ -99,7 +99,7 @@ function buildLayerPanel() {
   const d = document.getElementById("layers");
   d.innerHTML = `<div class="sec">Basemap</div>${Object.keys(bm).map((k, i) => `<label><input type="radio" name="bm" value="${k}" ${i === 0 ? "checked" : ""}> ${k}</label>`).join("")}
     <div class="sec">Plan</div><label><input type="checkbox" id="ov" > Values in unit + contingency</label>
-    <div class="sec">Landscape</div>${M.layers.filter((l) => l.visible && l.kind === "state").map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}</label>`).join("")}`;
+    <div class="sec">Landscape</div>${M.layers.filter((l) => l.visible && l.kind === "state").map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${RX.layerNote(l)}</label>`).join("")}`;
   d.querySelectorAll('input[name="bm"]').forEach((r) => (r.onchange = () => { Object.values(bm).forEach((x) => M.map.removeLayer(x)); bm[r.value].addTo(M.map).bringToBack(); }));
   d.querySelector("#ov").onchange = (e) => {
     if (M.overlayLayer) { M.map.removeLayer(M.overlayLayer); M.overlayLayer = null; }

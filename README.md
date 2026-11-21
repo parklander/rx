@@ -188,6 +188,33 @@ already restricted to planner and above, but that is not a substitute for the ap
 `seed_demo.py` loads a **notional** 161 ha burn unit and notional layers (marked DEMO) so the app can
 be tried, plus the real Red-headed Woodpecker critical habitat grid (176 × 10 km squares, Manitoba).
 
+## Critical habitat from ECCC
+
+`habitat_sync.py` keeps `habitat.critical_habitat` in step with ECCC's
+[national critical habitat dataset](https://open.canada.ca/data/en/dataset/47caa405-be2b-4e9e-8f53-c478ade2ca74)
+(final and proposed, areas and points). A systemd timer runs it every Monday at about 04:17.
+
+1. **Check**: the dataset date on open.canada.ca and the download's ETag, Last-Modified and size are compared
+   with the last check. If they all match, nothing is downloaded.
+2. **Download** the FGDB zip to `/var/lib/rx/sources/eccc_critical_habitat/`; if its SHA-256 matches the last
+   load, stop.
+3. **Extract** into a new temporary folder (absolute paths, `..` and archives over 8 GB are refused) and read
+   every feature layer. Layer names containing "propos" are marked *proposed*.
+4. **Filter** to `RX_CH_RADIUS_KM` (default 60) around `RX_CH_CENTRE` (default `-99.637,49.805`, CFB Shilo).
+   Parts with the same species, population and site ID become one feature.
+5. **Integrate** as one release per ECCC version: new features added, changed ones versioned, dropped ones
+   retired, all dated from ECCC's *date modified*. Hand-loaded features (`source` null, such as the
+   Red-headed Woodpecker grid) are left alone.
+6. Every check is logged in `meta.source_sync`; the layer panel shows the ECCC date and the last check.
+
+```bash
+python manage.py sync-habitat             # check, load only if new
+python manage.py sync-habitat --dry-run   # report what would change
+python manage.py sync-habitat --force     # reload even if nothing looks new
+python manage.py sync-habitat --file CriticalHabitat.zip   # a zip downloaded by hand
+journalctl -u rx-habitat-sync             # output of the weekly runs
+```
+
 ## Next
 
 - Map products: the six PMS 484-1 map templates generated from a plan (vicinity, project, fuels,
