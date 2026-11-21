@@ -196,8 +196,11 @@ be tried, plus the real Red-headed Woodpecker critical habitat grid (176 × 10 k
 
 1. **Check**: the dataset date on open.canada.ca and the download's ETag, Last-Modified and size are compared
    with the last check. If they all match, nothing is downloaded.
-2. **Download** the FGDB zip to `/var/lib/rx/sources/eccc_critical_habitat/`; if its SHA-256 matches the last
-   load, stop.
+2. **Download** the FGDB zip (from `data-donnees.az.ec.gc.ca/api/file?path=…`; the older `data-donnees.ec.gc.ca`
+   link now returns a web page) to `/var/lib/rx/sources/eccc_critical_habitat/`; if its SHA-256 matches the last
+   load, stop. Anything that isn't a zip is set aside and the next known address is tried. If none gives a zip,
+   the Shilo area is read from ECCC's map service (`maps-cartes.ec.gc.ca`, the four critical habitat sublayers)
+   instead, and the next check queries it again.
 3. **Extract** into a new temporary folder (absolute paths, `..` and archives over 8 GB are refused) and read
    every feature layer. Layer names containing "propos" are marked *proposed*.
 4. **Filter** to `RX_CH_RADIUS_KM` (default 60) around `RX_CH_CENTRE` (default `-99.637,49.805`, CFB Shilo).
