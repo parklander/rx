@@ -3,6 +3,7 @@
     python manage.py create-user <username> <role> "<Display Name>"   (prompts for the password)
     python manage.py migrate
     python manage.py seed-demo
+    python manage.py sync-habitat [--force] [--file CriticalHabitat.zip] [--dry-run]
 """
 import getpass
 import sys
@@ -22,6 +23,9 @@ def main():
     elif cmd == "seed-demo":
         import seed_demo
         seed_demo.seed()
+    elif cmd == "sync-habitat":
+        import habitat_sync
+        habitat_sync.main(sys.argv[2:])
     elif cmd == "create-user":
         username, role, name = sys.argv[2], sys.argv[3], sys.argv[4] if len(sys.argv) > 4 else sys.argv[2]
         pw = getpass.getpass("Password: ") if sys.stdin.isatty() else sys.stdin.readline().strip()

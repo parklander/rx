@@ -64,8 +64,24 @@ RX.layerStyle = (meta) => (f) => {
   if (meta.name === "infra.asset") color = { high: "#d84315", moderate: "#f2a900", low: "#888" }[p.vulnerability] || color;
   if (meta.name === "fuels.fuel_class") color = { mixed_grass: "#c9b458", grass_juniper: "#8fa83a", juniper: "#3f6b3a", aspen: "#5f9f8a", shrub: "#a87a50" }[p.fuel_class] || color;
   if (meta.name === "smoke.receptor") color = { high: "#b3261e", moderate: "#b26a00", low: "#666" }[p.sensitivity] || color;
-  return { color, weight: s.weight || 2, dashArray: s.dash, fillColor: color, fillOpacity: s.fill ? (meta.name === "fuels.fuel_class" ? 0.45 : 0.18) : 0.05 };
+  const proposed = meta.name === "habitat.critical_habitat" && p.status === "proposed";
+  return { color, weight: s.weight || 2, dashArray: proposed ? "6 4" : s.dash, fillColor: color,
+           fillOpacity: s.fill ? (meta.name === "fuels.fuel_class" ? 0.45 : proposed ? 0.08 : 0.18) : 0.05 };
 };
+
+// Readable popup lines for layers whose raw attributes are noisy.
+RX.popupLines = (meta, p) => {
+  if (meta.name !== "habitat.critical_habitat") return null;
+  const v = p.valid && p.valid.from ? p.valid.from.slice(0, 10) : "";
+  return [p.population && p.population !== p.species ? RX.esc(p.population) : "", p.sci_name ? `<i>${RX.esc(p.sci_name)}</i>` : "",
+    `${p.status === "proposed" ? "Proposed" : "Final"} critical habitat${p.site_name ? " · " + RX.esc(p.site_name) : ""}${p.grid_id ? " · " + RX.esc(p.grid_id) : ""}`,
+    p.source_doc ? RX.esc(p.source_doc) : "", p.sensitivity ? `Sensitivity: ${RX.esc(p.sensitivity)}` : "",
+    p.source === "eccc_national" ? `ECCC national dataset${v ? ", in force from " + v : ""}` : (p.source_doc ? "" : "Loaded by hand")]
+    .filter(Boolean).join("<br>");
+};
+
+// "ECCC 2026-06-15 · checked 2026-11-23" for synced layers.
+RX.layerNote = (l) => l.sync ? ` <span class="hint">(ECCC ${RX.esc((l.sync.remote_modified || "").slice(0, 10) || "?")}, checked ${l.sync.checked_at.slice(0, 10)}${l.sync.status === "failed" ? ", last check failed" : ""})</span>` : "";
 
 RX.landscapeLayer = (meta, fc) => L.geoJSON(fc, {
   style: RX.layerStyle(meta),
@@ -73,7 +89,8 @@ RX.landscapeLayer = (meta, fc) => L.geoJSON(fc, {
   onEachFeature: (f, l) => {
     const p = f.properties;
     const name = p.name || p.species || p.fuel_class || p.plot_code || p.kind || meta.title;
-    const bits = Object.entries(p).filter(([k, v]) => v !== null && v !== "" && !["feature_id", "row_id", "valid", "release_id", "changed_by", "source_event", "id", "event_id", "recorded_by", "recorded_at"].includes(k))
+    const custom = RX.popupLines(meta, p);
+    const bits = custom != null ? custom : Object.entries(p).filter(([k, v]) => v !== null && v !== "" && !["feature_id", "row_id", "valid", "release_id", "changed_by", "source_event", "id", "event_id", "recorded_by", "recorded_at"].includes(k))
       .slice(0, 8).map(([k, v]) => `${RX.esc(k)}: ${RX.esc(typeof v === "object" ? JSON.stringify(v) : v)}`).join("<br>");
     l.bindPopup(`<b>${RX.esc(name)}</b><br><span style="color:#666">${RX.esc(meta.title)}</span><br>${bits}`);
   },

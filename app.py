@@ -113,9 +113,13 @@ def element_defs(user=Depends(auth.current_user)):
 def layers(user=Depends(auth.current_user)):
     rows = db.all("select * from meta.layer order by name")
     rel = db.all("select * from meta.release order by id desc")
+    sync = db.one("""select checked_at, status, remote_modified, release_id from meta.source_sync
+                     where source = 'eccc_critical_habitat' order by checked_at desc limit 1""")
     for r in rows:
         r["releases"] = [db._plain(x) for x in rel if x["layer"] == r["name"]]
         r["visible"] = not r["sensitive"] or auth.ROLES.index(user["role"]) >= 1
+        if r["name"] == "habitat.critical_habitat" and sync:
+            r["sync"] = db._plain(sync)
     return rows
 
 

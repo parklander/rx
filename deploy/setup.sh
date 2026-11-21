@@ -47,6 +47,11 @@ systemctl reload caddy || systemctl restart caddy
 # Nightly database backup, 14 days kept
 install -m 755 "$APP/deploy/backup.sh" /etc/cron.daily/rx-backup
 
+# Weekly check of ECCC critical habitat (loads only when ECCC has published a new version)
+install -d -o rx -g rx /var/lib/rx/sources
+install -m 644 "$APP/deploy/rx-habitat-sync.service" "$APP/deploy/rx-habitat-sync.timer" /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now rx-habitat-sync.timer
+
 echo
 echo "Done: https://$DOMAIN"
 echo "Next: create your first user:"
