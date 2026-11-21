@@ -245,6 +245,11 @@ burn unit's figures are filled in; *Fill elevation, slope and aspect from the DE
 values are saved with the element, so an approved plan keeps them when a new DEM version arrives. Slope uses
 central differences at 5 m; cells under `RX_FLAT_SLOPE_PCT` (default 2%) count as flat.
 
+**On the map**: the Layers panel has a *Terrain* group drawn from the current DEM version: *Shaded relief*
+(3× vertical exaggeration, `RX_HILLSHADE_EXAG`), *Elevation (tinted relief)* and *Slope classes* (clear under 2%,
+then 2–5, 5–10, 10–20, 20–35, over 35%). Tiles are rendered on first view and cached on disk per version
+(`/var/lib/rx/sources/nrcan_dem/tiles/v<id>/`); the version is in the URL, so phones keep them offline.
+
 ```bash
 python manage.py sync-dem             # check, rebuild only if new
 python manage.py sync-dem --dry-run   # show what would be built

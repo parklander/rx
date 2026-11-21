@@ -81,7 +81,7 @@ RX.popupLines = (meta, p) => {
 };
 
 // "ECCC 2026-06-15 · checked 2026-11-23" for synced layers.
-RX.layerNote = (l) => l.sync ? ` <span class="hint">(ECCC ${RX.esc((l.sync.remote_modified || "").slice(0, 10) || "?")}, checked ${l.sync.checked_at.slice(0, 10)}${l.sync.status === "failed" ? ", last check failed" : ""})</span>` : "";
+RX.layerNote = (l) => l.note ? ` <span class="hint">(${RX.esc(l.note)})</span>` : l.sync ? ` <span class="hint">(ECCC ${RX.esc((l.sync.remote_modified || "").slice(0, 10) || "?")}, checked ${l.sync.checked_at.slice(0, 10)}${l.sync.status === "failed" ? ", last check failed" : ""})</span>` : "";
 
 RX.landscapeLayer = (meta, fc) => L.geoJSON(fc, {
   style: RX.layerStyle(meta),
@@ -112,3 +112,8 @@ RX.fovWedge = (lat, lon, heading, fov, radiusM = 80, style = {}) => {
   return L.polygon(pts, { color: "#00838f", weight: 1.5, fillColor: "#00e5ff", fillOpacity: 0.25, ...style });
 };
 RX.compassName = (d) => d == null ? "" : ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(((d % 360) + 360) % 360 / 45) % 8];
+
+// Raster layers (terrain tiles drawn from the DEM).
+RX.rasterLayer = (meta) => L.tileLayer(meta.tiles, { opacity: (meta.style || {}).opacity ?? 0.6, minZoom: 0, maxZoom: 20,
+  minNativeZoom: meta.min_zoom, maxNativeZoom: meta.native_zoom, bounds: meta.bounds, zIndex: 250,
+  attribution: "Terrain: NRCan HRDEM / MRDEM; GEM-15 by Google (CC-BY 4.0)" });
