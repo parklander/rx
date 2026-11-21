@@ -33,6 +33,7 @@ import pyogrio.raw
 import shapely
 from pyproj import CRS, Transformer
 from shapely import wkb
+import shapely.geometry
 from shapely.geometry import MultiPoint, MultiPolygon, Point, Polygon, mapping
 
 import db
@@ -42,7 +43,17 @@ TABLE = "habitat.critical_habitat"
 WHO = "eccc-sync"
 DATASET_ID = "47caa405-be2b-4e9e-8f53-c478ade2ca74"
 CKAN = f"https://open.canada.ca/data/api/action/package_show?id={DATASET_ID}"
+# Where the zip really comes from (the data-donnees.ec.gc.ca link on open.canada.ca now returns a web page).
+DOWNLOAD_URL = "https://data-donnees.az.ec.gc.ca/api/file?path=%2Fspecies%2Fprotectrestore%2Fcritical-habitat-species-at-risk-canada%2FCriticalHabitat.zip"
 FALLBACK_URL = "https://data-donnees.ec.gc.ca/data/species/protectrestore/critical-habitat-species-at-risk-canada/CriticalHabitat.zip"
+# Other places ECCC has served the same zip; tried in order when a download is not a zip.
+_PATH = "species/protectrestore/critical-habitat-species-at-risk-canada/CriticalHabitat.zip"
+ALT_URLS = [f"https://data-donnees.az.ec.gc.ca/data/{_PATH}"]
+# Last resort: ECCC's map service, queried for the AOI only. Sublayers: 1 point, 2 proposed point,
+# 3 area, 4 proposed area.
+MAPSERVER = os.environ.get("RX_CH_MAPSERVER", "https://maps-cartes.ec.gc.ca/arcgis/rest/services/CWS_SCF/CriticalHabitat/MapServer")
+REST_LAYERS = [(1, "Critical habitat point"), (2, "Proposed critical habitat point"),
+               (3, "Critical habitat area"), (4, "Proposed critical habitat area")]
 
 CENTRE = [float(v) for v in os.environ.get("RX_CH_CENTRE", "-99.637,49.805").split(",")]   # lon, lat
 RADIUS_KM = float(os.environ.get("RX_CH_RADIUS_KM", "60"))
@@ -53,14 +64,14 @@ MAX_UNZIPPED = 8 * 1024 ** 3     # refuse archives that would unpack to more tha
 # --- 1. check ------------------------------------------------------------------------------
 def remote_state(client):
     """What ECCC currently publishes: dataset date, download URL and the download's headers."""
-    state = {"remote_modified": None, "url": os.environ.get("RX_CH_URL") or FALLBACK_URL}
+    state = {"remote_modified": None, "url": os.environ.get("RX_CH_URL") or DOWNLOAD_URL, "ckan_url": None}
     try:
         res = client.get(CKAN).raise_for_status().json()["result"]
         state["remote_modified"] = res.get("date_modified") or res.get("metadata_modified")
         for r in res.get("resources", []):
             fmt, lang = (r.get("format") or "").upper(), r.get("language") or []
             if ("GDB" in fmt or "FGDB" in fmt) and ("en" in lang or r.get("url", "").endswith("/CriticalHabitat.zip")):
-                state["url"] = os.environ.get("RX_CH_URL") or r["url"]
+                state["ckan_url"] = r["url"]
                 break
     except (httpx.HTTPError, KeyError, ValueError) as e:
         print(f"open.canada.ca record not readable ({e}); using {state['url']}")
@@ -82,8 +93,8 @@ def last_check():
 
 def looks_unchanged(state, last):
     """Unchanged only if every signal both sides have agrees, and at least one was compared."""
-    if not last:
-        return False
+    if not last or MAPSERVER in (last.get("message") or ""):
+        return False   # the map service has no headers to compare: always query it again
     pairs = [(state.get(k), last[k]) for k in ("remote_modified", "etag", "last_modified", "content_length")]
     pairs = [(a, b) for a, b in pairs if a is not None and b is not None]
     return bool(pairs) and all(str(a) == str(b) for a, b in pairs)
@@ -163,6 +174,52 @@ def _int(v):
         return None
 
 
+def add_record(groups, layer_name, geom, p):
+    """One ECCC feature (EPSG:4326 geometry, ECCC attribute names) into its group."""
+    geom = shapely.make_valid(geom)
+    if geom.is_empty:
+        return
+    kind = "point" if geom.geom_type in ("Point", "MultiPoint") else "area"
+    status = "proposed" if "propos" in layer_name.lower() else "final"
+    site = p.get("SiteID")
+    ident = site or "g" + hashlib.sha1(shapely.normalize(shapely.set_precision(geom, 1e-6)).wkb).hexdigest()[:12]
+    key = "|".join(str(x) for x in (p.get("COSEWIC_ID") or p.get("SciName"), p.get("Population_E") or "", ident, kind, status))
+    attrs = {
+        "species": p.get("CommName_E") or p.get("SciName") or "unknown",
+        "sci_name": p.get("SciName"),
+        "status": status,
+        "population": p.get("Population_E") or p.get("Sub_Species_E"),
+        "site_id": site,
+        "site_name": p.get("SiteName_E"),
+        "cosewic_id": _int(p.get("COSEWIC_ID")),
+        "sara_status": _int(p.get("SARA_Status")),
+        "sensitivity": p.get("Sensitive_E"),
+        "tenure": None,
+        "grid_id": None,
+        "source_doc": p.get("RDoc_Name_E"),
+        "source": "eccc_national",
+        "source_key": key,
+    }
+    groups.setdefault(key, {"attrs": attrs, "parts": []})["parts"].append(geom)
+
+
+def finish(groups):
+    out = {}
+    for key, grp in groups.items():
+        g = shapely.union_all(grp["parts"])
+        polys = [x for x in getattr(g, "geoms", [g]) if isinstance(x, (Polygon, MultiPolygon))]
+        pts = [x for x in getattr(g, "geoms", [g]) if x.geom_type in ("Point", "MultiPoint")]
+        if polys:
+            g = MultiPolygon([q for x in polys for q in getattr(x, "geoms", [x])])
+        elif pts:
+            g = MultiPoint([q for x in pts for q in getattr(x, "geoms", [x])])
+        else:
+            continue
+        g = shapely.normalize(shapely.set_precision(g, 1e-7))
+        out[key] = {**grp["attrs"], "geom": g}
+    return out
+
+
 def read_features(gdb):
     """Every critical habitat feature within the AOI, in EPSG:4326, grouped by its stable key."""
     aoi = aoi_circle()
@@ -177,7 +234,6 @@ def read_features(gdb):
         aoi_l = transform(to_layer, aoi)
         meta, _, geoms, cols = pyogrio.raw.read(gdb, layer=name, bbox=aoi_l.bounds)
         fields = list(meta["fields"])
-        proposed = "propos" in name.lower()
         seen_layers.append(f"{name}: {len(geoms)} in AOI box")
         for i, g in enumerate(geoms):
             if g is None:
@@ -185,45 +241,44 @@ def read_features(gdb):
             geom = wkb.loads(bytes(g))
             if geom.is_empty or not geom.intersects(aoi_l):
                 continue
-            geom = shapely.make_valid(transform(to_ll, geom))
-            p = {f: _s(cols[j][i]) for j, f in enumerate(fields)}
-            kind = "point" if geom.geom_type in ("Point", "MultiPoint") else "area"
-            status = "proposed" if proposed else "final"
-            site = p.get("SiteID")
-            ident = site or "g" + hashlib.sha1(shapely.normalize(shapely.set_precision(geom, 1e-6)).wkb).hexdigest()[:12]
-            key = "|".join(str(x) for x in (p.get("COSEWIC_ID") or p.get("SciName"), p.get("Population_E") or "", ident, kind, status))
-            attrs = {
-                "species": p.get("CommName_E") or p.get("SciName") or "unknown",
-                "sci_name": p.get("SciName"),
-                "status": status,
-                "population": p.get("Population_E") or p.get("Sub_Species_E"),
-                "site_id": site,
-                "site_name": p.get("SiteName_E"),
-                "cosewic_id": _int(p.get("COSEWIC_ID")),
-                "sara_status": _int(p.get("SARA_Status")),
-                "sensitivity": p.get("Sensitive_E"),
-                "tenure": None,
-                "grid_id": None,
-                "source_doc": p.get("RDoc_Name_E"),
-                "source": "eccc_national",
-                "source_key": key,
-            }
-            grp = groups.setdefault(key, {"attrs": attrs, "parts": []})
-            grp["parts"].append(geom)
-    out = {}
-    for key, grp in groups.items():
-        g = shapely.union_all(grp["parts"])
-        polys = [x for x in getattr(g, "geoms", [g]) if isinstance(x, (Polygon, MultiPolygon))]
-        pts = [x for x in getattr(g, "geoms", [g]) if x.geom_type in ("Point", "MultiPoint")]
-        if polys:
-            g = MultiPolygon([q for x in polys for q in getattr(x, "geoms", [x])])
-        elif pts:
-            g = MultiPoint([q for x in pts for q in getattr(x, "geoms", [x])])
-        else:
-            continue
-        g = shapely.normalize(shapely.set_precision(g, 1e-7))
-        out[key] = {**grp["attrs"], "geom": g}
-    return out, seen_layers
+            add_record(groups, name, transform(to_ll, geom), {f: _s(cols[j][i]) for j, f in enumerate(fields)})
+    return finish(groups), seen_layers
+
+
+def read_mapserver(client):
+    """The same features from ECCC's map service, queried for the AOI box and then clipped to the circle.
+    Returns (features, layer notes, sha256 of what the service returned)."""
+    aoi = aoi_circle()
+    x1, y1, x2, y2 = aoi.bounds
+    groups, seen, h = {}, [], hashlib.sha256()
+    for lid, name in REST_LAYERS:
+        offset, n = 0, 0
+        while True:
+            r = client.get(f"{MAPSERVER}/{lid}/query", params={
+                "where": "1=1", "geometry": f"{x1},{y1},{x2},{y2}", "geometryType": "esriGeometryEnvelope",
+                "inSR": 4326, "spatialRel": "esriSpatialRelIntersects", "outFields": "*", "outSR": 4326,
+                "orderByFields": "OBJECTID", "resultOffset": offset, "resultRecordCount": 500, "f": "geojson"})
+            r.raise_for_status()
+            fc = r.json()
+            if "error" in fc:
+                raise RuntimeError(f"map service layer {lid}: {fc['error']}")
+            feats = fc.get("features", [])
+            for f in feats:
+                if not f.get("geometry"):
+                    continue
+                props = {k: _s(v) for k, v in (f.get("properties") or {}).items() if k not in ("OBJECTID", "SHAPE_Length", "SHAPE_Area", "Shape_Length", "Shape_Area")}
+                geom = shapely.geometry.shape(f["geometry"])
+                if not geom.intersects(aoi):
+                    continue
+                h.update(json.dumps([lid, props, shapely.normalize(shapely.set_precision(geom, 1e-7)).wkt], sort_keys=True, default=str).encode())
+                add_record(groups, name, geom, props)
+                n += 1
+            more = fc.get("exceededTransferLimit") or (fc.get("properties") or {}).get("exceededTransferLimit")
+            if not feats or not more:
+                break
+            offset += len(feats)
+        seen.append(f"map service {name}: {n} in AOI")
+    return finish(groups), seen, h.hexdigest()
 
 
 # --- 5. integrate --------------------------------------------------------------------------
@@ -300,6 +355,17 @@ def log(c, status, state=None, sha=None, release=None, counts=None, message=None
 
 
 # --- run -----------------------------------------------------------------------------------
+def finish_run(new, state, sha, dry_run):
+    with db.tx() as c:
+        rid, counts = integrate(c, new, state, sha, dry_run)
+        status = ("would update" if dry_run and any(counts[k] for k in ("added", "changed", "retired"))
+                  else "updated" if rid else "no_change_in_aoi")
+        if not dry_run:
+            log(c, status, state, sha, rid, counts, message=f"from {state.get('url')}")
+    print(f"{status}: {json.dumps(counts)}" + (f", release {rid}" if rid else "") + (" (dry run)" if dry_run else ""))
+    return status
+
+
 def run(force=False, file=None, dry_run=False):
     db.open_pool()
     state, sha = {}, None
@@ -319,9 +385,33 @@ def run(force=False, file=None, dry_run=False):
                             log(c, "unchanged", state, last["sha256"], message="headers and dataset date match the last check")
                     print(f"unchanged since {last['checked_at']:%Y-%m-%d} (ECCC dataset {state.get('remote_modified')})")
                     return "unchanged"
-                print(f"downloading {state['url']}")
                 zpath = SOURCE_DIR / "CriticalHabitat.zip"
-                sha = download(client, state["url"], zpath)
+                new = None
+                for url in dict.fromkeys(u for u in [state["url"], DOWNLOAD_URL, state.get("ckan_url"), FALLBACK_URL, *ALT_URLS] if u):
+                    print(f"downloading {url}")
+                    try:
+                        sha = download(client, url, zpath)
+                    except httpx.HTTPError as e:
+                        print(f"  {e}")
+                        continue
+                    if zipfile.is_zipfile(zpath):
+                        state["url"] = url
+                        break
+                    head = zpath.read_bytes()[:120].decode("utf-8", "replace").replace("\n", " ")
+                    print(f"  not a zip ({zpath.stat().st_size} bytes, starts: {head!r})")
+                else:
+                    print("no zip found; reading the Shilo area from ECCC's map service instead")
+                    new, layers, sha = read_mapserver(client)
+                    state["url"] = MAPSERVER
+                if new is not None:
+                    if not force and last and sha == last["sha256"]:
+                        if not dry_run:
+                            with db.tx() as c:
+                                log(c, "unchanged", state, sha, message=f"from {MAPSERVER}: same features as the last load")
+                        print("map service returned the same features as the last load")
+                        return "unchanged"
+                    print("\n".join(layers))
+                    return finish_run(new, state, sha, dry_run)
         if not force and last and sha == last["sha256"]:
             if not dry_run:
                 with db.tx() as c:
@@ -336,15 +426,7 @@ def run(force=False, file=None, dry_run=False):
         finally:
             shutil.rmtree(work, ignore_errors=True)
         print("\n".join(layers))
-
-        with db.tx() as c:
-            rid, counts = integrate(c, new, state, sha, dry_run)
-            status = ("would update" if dry_run and any(counts[k] for k in ("added", "changed", "retired"))
-                      else "updated" if rid else "no_change_in_aoi")
-            if not dry_run:
-                log(c, status, state, sha, rid, counts)
-        print(f"{status}: {json.dumps(counts)}" + (f", release {rid}" if rid else "") + (" (dry run)" if dry_run else ""))
-        return status
+        return finish_run(new, state, sha, dry_run)
     except Exception as e:
         if not dry_run:
             try:
