@@ -290,6 +290,8 @@ def run(force=False, dry_run=False, client=None):
                                order by created_at desc offset 1""", (LAYER,)).fetchall()
         for o in old:
             Path(o["path"]).unlink(missing_ok=True)
+            import shutil
+            shutil.rmtree(OUT_DIR / "tiles" / f"v{o['id']}", ignore_errors=True)
         print(f"updated: version {vid}, {path.name}, " + ", ".join(f"{k} {v}%" for k, v in info["share"].items())
               + f", no data {info['empty_pct']}%")
         return "updated"

@@ -336,8 +336,9 @@ function buildMap() {
     tb.onclick = () => { d.hidden = !d.hidden; tb.setAttribute("aria-expanded", String(!d.hidden)); tb.textContent = d.hidden ? "Layers ▾" : "Layers ▴"; };
     L.DomEvent.disableClickPropagation(wrap); L.DomEvent.disableScrollPropagation(wrap);
     d.innerHTML = `<div class="sec">Basemap</div>${Object.keys(bm).map((k, i) => `<label><input type="radio" name="bm" value="${k}" ${i === 0 ? "checked" : ""}> ${k}</label>`).join("")}
+      ${S.layers.some((l) => l.kind === "raster") ? `<div class="sec">Terrain</div>${S.layers.filter((l) => l.kind === "raster").map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${RX.layerNote(l)}</label>`).join("")}` : ""}
       <div class="sec">Landscape layers</div>
-      ${S.layers.filter((l) => l.visible).map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${l.kind === "event" ? ' <span class="hint">(records)</span>' : ""}${RX.layerNote(l)}</label>`).join("")}
+      ${S.layers.filter((l) => l.visible && l.kind !== "raster").map((l) => `<label><input type="checkbox" data-layer="${l.name}"> ${esc(l.title)}${l.kind === "event" ? ' <span class="hint">(records)</span>' : ""}${RX.layerNote(l)}</label>`).join("")}
       <div class="sec">Show layers as on</div><input type="date" id="asof" aria-label="Show landscape layers as they were on this date">
       <div class="hint" style="margin-top:4px">Blank = current.</div>`;
     d.querySelectorAll('input[name="bm"]').forEach((r) => (r.onchange = () => { Object.values(bm).forEach((b) => S.map.removeLayer(b)); bm[r.value].addTo(S.map).bringToBack(); }));
@@ -354,6 +355,7 @@ async function toggleLandscape(name, on) {
   if (S.landscape[name]) { S.map.removeLayer(S.landscape[name]); delete S.landscape[name]; }
   if (!on) return;
   const meta = S.layers.find((l) => l.name === name);
+  if (meta.kind === "raster") { S.landscape[name] = RX.rasterLayer(meta).addTo(S.map); return; }
   const q = S.asOf ? `?on_ground=${S.asOf}T12:00:00Z` : "";
   const fc = await call(() => RX.api(`/api/layers/${name}${q}`));
   S.landscape[name] = RX.landscapeLayer(meta, fc).addTo(S.map);

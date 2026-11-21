@@ -58,6 +58,19 @@ def index():
     return FileResponse(ROOT / "static" / "index.html")
 
 
+@app.get("/tiles/terrain/{ver}/{style}/{z}/{x}/{y}.png")
+def terrain_tile(ver: int, style: str, z: int, x: int, y: int, user=Depends(auth.current_user)):
+    """Shaded relief, elevation and slope tiles from the current DEM version. Old version numbers get
+    the current tiles (short cache) so an open map keeps working across a DEM update."""
+    import terrain_tiles
+    cur = terrain_tiles.current()
+    if style not in terrain_tiles.STYLES or not (0 <= z <= 22):
+        raise HTTPException(404, "no such tile")
+    data = terrain_tiles.render(style, z, x, y)
+    keep = "private, max-age=31536000, immutable" if cur and cur["id"] == ver else "private, max-age=300"
+    return Response(data, media_type="image/png", headers={"Cache-Control": keep})
+
+
 @app.get("/m")
 @app.get("/m/{rest:path}")
 def mobile(rest: str = ""):
@@ -120,7 +133,8 @@ def layers(user=Depends(auth.current_user)):
         r["visible"] = not r["sensitive"] or auth.ROLES.index(user["role"]) >= 1
         if r["name"] == "habitat.critical_habitat" and sync:
             r["sync"] = db._plain(sync)
-    return rows
+    import terrain_tiles
+    return terrain_tiles.layers() + rows
 
 
 def _layer(name, user):
