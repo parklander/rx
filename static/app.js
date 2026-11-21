@@ -123,6 +123,7 @@ async function showPlan(id, sel) {
   S.sel = sel || (S.planId === id && S.sel) || "e-4";
   const [plan, fc, ov] = await call(() => Promise.all([RX.api(`/api/plans/${id}`), RX.api(`/api/plans/${id}/features`), RX.api(`/api/plans/${id}/overlay`)]));
   S.plan = plan; S.featuresFC = fc; S.overlay = ov;
+  S.terrain = await RX.api(`/api/plans/${id}/terrain`).catch(() => null);
   const fresh = S.view !== "plan" || S.planId !== id || !document.getElementById("pv");
   S.view = "plan"; S.mode = "plan"; S.planId = id; S.dirty = false;
   if (fresh) {
@@ -172,6 +173,18 @@ function renderMain() {
   ({ burn: panelBurn, versions: panelVersions })[S.sel](document.getElementById("docbody"));
 }
 
+// Copy the burn unit's DEM figures into the Element 4 fields (they stay editable).
+function fillTerrain(form) {
+  const u = S.terrain && S.terrain.unit; if (!u) return;
+  const set = (k, v) => { const i = form.querySelector(`.ff[data-key="${k}"] input, .ff[data-key="${k}"] textarea`); if (i) i.value = v; };
+  set("elev_min", Math.round(u.elev_min)); set("elev_max", Math.round(u.elev_max));
+  set("slope", `mean ${u.slope_mean}%, 90% of the unit under ${u.slope_p90}%, max ${u.slope_max}% (DEM v${S.terrain.dem.id}, ${S.terrain.dem.res_m} m)`);
+  const a = Object.entries(u.aspects || {}).filter(([, v]) => v >= 10).map(([k]) => k);
+  const keep = a.length ? a : [Object.entries(u.aspects).sort((x, y) => y[1] - x[1])[0][0]];
+  form.querySelectorAll('.ff[data-key="aspect"] input[type=checkbox]').forEach((c) => (c.checked = keep.includes(c.value)));
+  form.dispatchEvent(new Event("change"));
+}
+
 // The plan's own data, shown read-only inside elements.
 function autoHtml(src, live) {
   const p = S.plan, feats = S.featuresFC.features.map((f) => f.properties);
@@ -188,6 +201,21 @@ function autoHtml(src, live) {
       const v = S.overlay.features.map((f) => f.properties).filter((x) => !["fuels.fuel_class", "ops.road", "ops.fireguard"].includes(x.layer));
       const title = (n) => (S.layers.find((l) => l.name === n) || {}).title || n;
       return v.length ? `<table class="grid"><thead><tr><th>Value</th><th>Layer</th><th>Detail</th><th>Where</th></tr></thead><tbody>${v.map((x) => `<tr><td>${esc(x.name || x.species || x.kind || "")}${x.grid_id ? " · " + esc(x.grid_id) : ""}</td><td>${esc(title(x.layer))}</td><td>${esc(x.vulnerability || x.measure || x.status || "")}</td><td>${x.zone}</td></tr>`).join("")}</tbody></table>` : '<span class="hint">Nothing recorded in the unit or contingency area.</span>';
+    }
+    case "terrain": {
+      const t = S.terrain;
+      if (!t || !t.dem) return '<span class="hint">No elevation model loaded yet. Run <code>manage.py sync-dem</code> on the server.</span>';
+      if (t.error) return `<span class="warn">Terrain could not be worked out: ${esc(t.error)}</span>`;
+      if (!t.unit) return none("the burn unit");
+      const asp = (a) => Object.entries(a || {}).filter(([, v]) => v >= 5).sort((x, y) => y[1] - x[1]).map(([k, v]) => `${k} ${Math.round(v)}%`).join(", ");
+      const row = (name, x) => x && x.elev_min != null ? `<tr><td>${esc(name)}</td><td class="num">${x.elev_min}</td><td class="num">${x.elev_max}</td><td class="num">${x.relief}</td><td class="num">${x.slope_mean}</td><td class="num">${x.slope_p90}</td><td class="num">${x.slope_max}</td><td>${asp(x.aspects)}</td></tr>`
+        : `<tr><td>${esc(name)}</td><td colspan="7" class="hint">outside the elevation model</td></tr>`;
+      const src = Object.entries(t.unit.sources || {}).map(([k, v]) => `${esc(k)} ${v}%`).join(", ");
+      const ro = locked() || !can("planner");
+      return `<table class="grid"><thead><tr><th>Area</th><th class="num">Low m</th><th class="num">High m</th><th class="num">Relief m</th><th class="num">Mean slope %</th><th class="num">90% of area under %</th><th class="num">Max slope %</th><th>Aspects (≥5% of area)</th></tr></thead>
+        <tbody>${row("Burn unit", t.unit)}${t.ignition_units.map((u) => row("Ignition unit " + u.label, u)).join("")}</tbody></table>
+        <div class="hint">DEM version ${t.dem.id}, built ${esc(t.dem.built)}, ${t.dem.res_m} m cells; under the burn unit: ${src || "?"}. Heights ${esc(t.dem.vertical || "")}${t.dem.sources.filter((x) => x.datum_shift_m != null).map((x) => `; ${esc(x.title)} shifted ${x.datum_shift_m > 0 ? "+" : ""}${x.datum_shift_m} m to match`).join("")}. Flat = slope under ${t.unit.flat_below_pct}%.</div>
+        ${ro ? "" : '<button type="button" class="btn small" data-fill-terrain>Fill elevation, slope and aspect from the DEM</button>'}`;
     }
     case "receptors": return p.receptors.length ? `<table class="grid"><thead><tr><th>Receptor</th><th>Type</th><th>Sensitivity</th><th class="num">km</th><th class="num">Bearing</th></tr></thead><tbody>${p.receptors.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.kind || "")}</td><td>${esc(r.sensitivity || "")}</td><td class="num">${r.km}</td><td class="num">${r.bearing}°</td></tr>`).join("")}</tbody></table>` : '<span class="hint">No receptors within 40 km in the database.</span>';
     case "test_fire_site": { const l = list("test_fire_site"); return l ? `<ul>${l}</ul>` : none("a test fire site"); }
@@ -242,8 +270,14 @@ function renderElement(main, code, lock) {
   if (d.map) placeMap("mslot");
   const form = document.getElementById("ef");
   const refreshAuto = () => { const live = read(); form.querySelectorAll(".auto[data-src]").forEach((a) => (a.innerHTML = autoHtml(a.dataset.src, live))); };
+  form.addEventListener("click", (ev) => { if (ev.target.matches("[data-fill-terrain]")) { fillTerrain(form); toast("Filled from the DEM. Save to keep."); } });
   const read = Forms.render(form, d.fields, e.content, ro, { onChange: () => { S.dirty = true; const b = document.getElementById("esave"); if (b) b.textContent = "Save*"; refreshAuto(); } });
   refreshAuto();
+  // Element 4: fill the terrain fields from the DEM the first time, if they are still empty
+  const c4 = e.content || {};
+  if (d.code === "4" && !ro && S.terrain && S.terrain.unit && c4.elev_min == null && c4.elev_max == null && !c4.slope && !(c4.aspect || []).length) {
+    fillTerrain(form); toast("Elevation, slope and aspect filled from the DEM. Save to keep.");
+  }
   form.querySelectorAll(".component").forEach((c) => {
     const box = document.createElement("div"); c.appendChild(box);
     ({ prescription: panelRx, variants: panelVariants, signatures: panelSignatures, prep_tasks: panelPrepComponent })[c.dataset.component](box);
